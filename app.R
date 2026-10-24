@@ -6,7 +6,6 @@
 library(shiny)
 library(bslib)
 library(readxl)
-library(readr)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
@@ -17,12 +16,13 @@ roster_path <- file.path("data", "metadata", "roster.csv")
 # ---------------- ROSTER ----------------
 
 roster <- if (file.exists(roster_path)) {
-  read_csv(roster_path, show_col_types = FALSE) |>
-    mutate(
-      Jersey = as.character(Jersey),
-      FirstName = as.character(FirstName),
-      Position = as.character(Position)
-    ) |>
+  read.csv(
+    roster_path,
+    stringsAsFactors = FALSE,
+    colClasses = "character",
+    check.names = FALSE
+  ) |>
+    as_tibble() |>
     arrange(suppressWarnings(as.numeric(Jersey)))
 } else {
   tibble(
