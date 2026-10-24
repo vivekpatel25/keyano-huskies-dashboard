@@ -340,11 +340,35 @@ server <- function(input, output, session) {
   })
   output$rotation_table <- renderTable({ current_match()$rotation }, striped=TRUE, bordered=FALSE, spacing="s")
 
+  
   output$setting_ui <- renderUI({
-    tagList(div(class="page-head",h2("SETTING STATS"),p("Who sets the ball and what happens after the set.")),
-      fluidRow(column(6,div(class="panel-card",h4(class="section-title","First-ball sets"),tableOutput("fb_table"))),
-               column(6,div(class="panel-card",h4(class="section-title","Transition sets"),tableOutput("trans_table"))))
+    tagList(
+      div(
+        class = "page-head",
+        h2("SETTING STATS"),
+        p("Who sets the ball and what happens after the set.")
+      ),
+      fluidRow(
+        column(
+          6,
+          div(
+            class = "panel-card",
+            h4(class = "section-title", "First-ball sets"),
+            tableOutput("fb_table")
+          )
+        ),
+        column(
+          6,
+          div(
+            class = "panel-card",
+            h4(class = "section-title", "Transition sets"),
+            tableOutput("trans_table")
+          )
+        )
+      )
+    )
   })
+
   output$fb_table <- renderTable({ current_match()$fb_sets }, striped=TRUE, bordered=FALSE, spacing="s")
   output$trans_table <- renderTable({ current_match()$trans_sets }, striped=TRUE, bordered=FALSE, spacing="s")
 
