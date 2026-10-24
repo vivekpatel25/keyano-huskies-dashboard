@@ -10,6 +10,55 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 
+parse_match_date <- function(x) {
+  if (inherits(x, "Date")) {
+    return(x)
+  }
+
+  if (inherits(x, c("POSIXct", "POSIXlt"))) {
+    return(as.Date(x))
+  }
+
+  # Excel dates may be stored as numeric serial numbers.
+  if (is.numeric(x)) {
+    result <- as.Date(x, origin = "1899-12-30")
+    result[x < 1 | x > 100000] <- NA
+    return(result)
+  }
+
+  x <- trimws(as.character(x))
+  result <- rep(as.Date(NA), length(x))
+
+  # Try common date formats explicitly.
+  formats <- c(
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%m/%d/%Y",
+    "%d/%m/%Y",
+    "%d-%m-%Y",
+    "%d-%b-%Y",
+    "%d-%B-%Y",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%d %b %Y",
+    "%d %B %Y"
+  )
+
+  for (fmt in formats) {
+    missing <- is.na(result) & !is.na(x) & nzchar(x)
+
+    if (!any(missing)) break
+
+    parsed <- suppressWarnings(
+      as.Date(x[missing], format = fmt)
+    )
+
+    result[which(missing)] <- parsed
+  }
+
+  result
+}
+
 match_dir <- file.path("data", "matches")
 roster_path <- file.path("data", "metadata", "roster.csv")
 
@@ -95,17 +144,27 @@ read_match <- function(path) {
       as.character(val)
     }
 
-    date_val <- get_info("Match date")
+   
+date_val <- get_info("Match date")
 
-    match_date <- suppressWarnings(
-      as.Date(date_val)
+match_date <- parse_match_date(date_val)
+
+# If the workbook date is missing, try the date in the filename.
+if (is.na(match_date)) {
+  filename_date <- sub(
+    "^([0-9]{4}-[0-9]{2}-[0-9]{2}).*$",
+    "\\1",
+    basename(path)
+  )
+
+  if (grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", filename_date)) {
+    match_date <- as.Date(
+      filename_date,
+      format = "%Y-%m-%d"
     )
+  }
+}
 
-    if (is.na(match_date)) {
-      match_date <- suppressWarnings(
-        as.Date(date_val, format = "%m/%d/%Y")
-      )
-    }
 
     opponent <- get_info("Opponent")
 
