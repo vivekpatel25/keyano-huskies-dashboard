@@ -1,25 +1,54 @@
 # ============================================================
-# HUSKIES COACHES DASHBOARD
-# Single-page scrolling layout
+# KEYANO HUSKIES COACHES DASHBOARD
+# Original design + workbook data connection
 # ============================================================
 
 library(shiny)
 library(bslib)
 library(readxl)
+library(readr)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
 
-MATCH_DIR <- file.path("data", "matches")
+match_dir <- file.path("data", "matches")
+roster_path <- file.path("data", "metadata", "roster.csv")
 
-# ---------- Workbook loading ----------
+# ---------------- ROSTER ----------------
 
-read_match_file <- function(path) {
+roster <- if (file.exists(roster_path)) {
+  read_csv(roster_path, show_col_types = FALSE) |>
+    mutate(
+      Jersey = as.character(Jersey),
+      FirstName = as.character(FirstName),
+      Position = as.character(Position)
+    ) |>
+    arrange(suppressWarnings(as.numeric(Jersey)))
+} else {
+  tibble(
+    Jersey = character(),
+    FirstName = character(),
+    Position = character()
+  )
+}
+
+match_windows <- c(
+  "Most Recent Match",
+  "Previous Match",
+  "Last 5",
+  "Last 10",
+  "Full Season"
+)
+
+# ---------------- WORKBOOK READER ----------------
+
+read_match <- function(path) {
+
   tryCatch({
 
     sheets <- excel_sheets(path)
 
-    required_sheets <- c(
+    required <- c(
       "Match Information",
       "Key Metrics",
       "By Skill",
@@ -29,17 +58,18 @@ read_match_file <- function(path) {
       "Passing by Contact Point"
     )
 
-    missing_sheets <- setdiff(required_sheets, sheets)
+    missing <- setdiff(required, sheets)
 
-    if (length(missing_sheets)) {
+    if (length(missing)) {
       stop(
         paste(
-          "Missing worksheet(s):",
-          paste(missing_sheets, collapse = ", ")
+          "Missing worksheets:",
+          paste(missing, collapse = ", ")
         )
       )
     }
 
+    # Match Information
     info <- read_excel(
       path,
       sheet = "Match Information",
@@ -47,55 +77,65 @@ read_match_file <- function(path) {
     )
 
     get_info <- function(label) {
-      hit <- which(trimws(as.character(info[[1]])) == label)
 
-      if (!length(hit)) return(NA_character_)
+      ix <- which(
+        trimws(as.character(info[[1]])) == label
+      )
 
-      value <- info[[2]][hit[1]]
-
-      if (!length(value) || is.na(value)) {
+      if (!length(ix)) {
         return(NA_character_)
       }
 
-      as.character(value)
+      val <- info[[2]][ix[1]]
+
+      if (!length(val) || is.na(val)) {
+        return(NA_character_)
+      }
+
+      as.character(val)
     }
 
-    raw_date <- get_info("Match date")
-    match_date <- suppressWarnings(as.Date(raw_date))
+    date_val <- get_info("Match date")
+
+    match_date <- suppressWarnings(
+      as.Date(date_val)
+    )
 
     if (is.na(match_date)) {
       match_date <- suppressWarnings(
-        as.Date(raw_date, format = "%m/%d/%Y")
+        as.Date(date_val, format = "%m/%d/%Y")
       )
     }
 
     opponent <- get_info("Opponent")
-    result <- get_info("Match result")
 
     if (is.na(opponent) || !nzchar(opponent)) {
-      opponent <- tools::file_path_sans_ext(basename(path))
+      opponent <- tools::file_path_sans_ext(
+        basename(path)
+      )
     }
 
+    result <- get_info("Match result")
+
     # Key Metrics
-    key_raw <- read_excel(
+    km <- read_excel(
       path,
       sheet = "Key Metrics",
       col_names = FALSE
     )
 
     key <- tibble(
-      metric = as.character(key_raw[[2]]),
-      value = key_raw[[3]]
-    ) %>%
+      metric = trimws(as.character(km[[2]])),
+      value = km[[3]]
+    ) |>
       filter(
         !is.na(metric),
-        !is.na(value),
-        nzchar(trimws(metric))
-      ) %>%
-      mutate(metric = trimws(metric))
+        metric != "",
+        !is.na(value)
+      )
 
     # By Skill
-    skill_raw <- read_excel(
+    bs <- read_excel(
       path,
       sheet = "By Skill",
       col_names = FALSE
@@ -104,14 +144,26 @@ read_match_file <- function(path) {
     skill_rows <- list()
     section <- NA_character_
 
-    for (i in seq_len(nrow(skill_raw))) {
-      a <- skill_raw[[1]][i]
-      b <- skill_raw[[2]][i]
-      c <- skill_raw[[3]][i]
+    for (i in seq_len(nrow(bs))) {
 
-      if (!is.na(a) && is.na(b) && is.na(c)) {
+      a <- bs[[1]][i]
+      b <- bs[[2]][i]
+      c <- bs[[3]][i]
+
+      if (
+        !is.na(a) &&
+        (is.na(b) || identical(as.character(b), "")) &&
+        (is.na(c) || identical(as.character(c), ""))
+      ) {
+
         section <- as.character(a)
-      } else if (!is.na(b) && !is.na(c) && !is.na(section)) {
+
+      } else if (
+        !is.na(b) &&
+        !is.na(c) &&
+        !is.na(section)
+      ) {
+
         skill_rows[[length(skill_rows) + 1]] <- tibble(
           skill = section,
           metric = as.character(b),
@@ -131,10 +183,13 @@ read_match_file <- function(path) {
     }
 
     # Attack Detail
-    attack <- read_excel(path, sheet = "Attack Detail")
+    attack <- read_excel(
+      path,
+      sheet = "Attack Detail"
+    )
 
     if ("Attack Type" %in% names(attack)) {
-      attack <- attack %>%
+      attack <- attack |>
         fill(`Attack Type`, .direction = "down")
     }
 
@@ -154,53 +209,73 @@ read_match_file <- function(path) {
       skip = 1
     )
 
-    names(rotation) <- make.unique(names(rotation))
+    names(rotation) <- trimws(names(rotation))
 
     if ("Rotation" %in% names(rotation)) {
-      rotation <- rotation %>%
+      rotation <- rotation |>
         filter(
           !is.na(Rotation),
           grepl("^Ro[1-6]$", as.character(Rotation))
         )
     }
 
-    # Setting Stats
-    setting <- read_excel(
+    # Setting Stats:
+    # Rows 1-8: rotation totals
+    # Rows 10-13: first-ball setting
+    # Rows 15-18: transition setting
+
+    setting_raw <- read_excel(
       path,
       sheet = "Setting Stats",
       col_names = FALSE
     )
 
-    headers <- which(
-      as.character(setting[[1]]) == "Who Sets"
+    read_setting_block <- function(
+      header_row,
+      first_row,
+      last_row
+    ) {
+
+      header <- as.character(
+        unlist(
+          setting_raw[header_row, 1:8],
+          use.names = FALSE
+        )
+      )
+
+      dat <- setting_raw[first_row:last_row, 1:8]
+
+      names(dat) <- make.unique(
+        ifelse(
+          is.na(header) | header == "",
+          paste0("Column", seq_along(header)),
+          trimws(header)
+        )
+      )
+
+      dat
+    }
+
+    rotation_setting <- setting_raw[1:8, 1:4]
+
+    names(rotation_setting) <- c(
+      "Rotation",
+      "Sets",
+      "Kills",
+      "Attacks"
     )
 
-    fb_sets <- tibble()
-    trans_sets <- tibble()
+    fb_sets <- read_setting_block(
+      header_row = 10,
+      first_row = 11,
+      last_row = 13
+    )
 
-    if (length(headers) >= 1) {
-      h <- headers[1]
-      end_row <- min(h + 3, nrow(setting))
-
-      if (h < nrow(setting)) {
-        fb_sets <- setting[(h + 1):end_row, 1:8]
-        names(fb_sets) <- make.unique(
-          as.character(setting[h, 1:8])
-        )
-      }
-    }
-
-    if (length(headers) >= 2) {
-      h <- headers[2]
-      end_row <- min(h + 3, nrow(setting))
-
-      if (h < nrow(setting)) {
-        trans_sets <- setting[(h + 1):end_row, 1:8]
-        names(trans_sets) <- make.unique(
-          as.character(setting[h, 1:8])
-        )
-      }
-    }
+    trans_sets <- read_setting_block(
+      header_row = 15,
+      first_row = 16,
+      last_row = 18
+    )
 
     # Passing by Contact Point
     passing <- read_excel(
@@ -214,17 +289,11 @@ read_match_file <- function(path) {
     )
 
     if (length(fill_cols)) {
-      passing <- passing %>%
-        fill(all_of(fill_cols), .direction = "down")
-    }
-
-    for (nm in intersect(
-      c("Total Pass", "Good Pass", "Aced"),
-      names(passing)
-    )) {
-      passing[[nm]] <- suppressWarnings(
-        as.numeric(passing[[nm]])
-      )
+      passing <- passing |>
+        fill(
+          all_of(fill_cols),
+          .direction = "down"
+        )
     }
 
     list(
@@ -237,6 +306,7 @@ read_match_file <- function(path) {
       skills = skills,
       attack = attack,
       rotation = rotation,
+      rotation_setting = rotation_setting,
       fb_sets = fb_sets,
       trans_sets = trans_sets,
       passing = passing,
@@ -256,768 +326,976 @@ read_match_file <- function(path) {
       path = path,
       file = basename(path),
       date = as.Date(NA),
-      opponent = tools::file_path_sans_ext(basename(path)),
-      result = NA_character_,
-      key = tibble(metric = character(), value = numeric()),
-      skills = tibble(
-        skill = character(),
-        metric = character(),
-        value = numeric()
+      opponent = tools::file_path_sans_ext(
+        basename(path)
       ),
-      attack = tibble(),
-      rotation = tibble(),
-      fb_sets = tibble(),
-      trans_sets = tibble(),
-      passing = tibble(),
+      result = NA_character_,
       error = conditionMessage(e)
     )
   })
 }
 
+# ---------------- LOAD MATCHES ----------------
+
 load_matches <- function() {
-  if (!dir.exists(MATCH_DIR)) return(list())
+
+  if (!dir.exists(match_dir)) {
+    return(list())
+  }
 
   files <- list.files(
-    MATCH_DIR,
+    match_dir,
     pattern = "\\.xlsx$",
     full.names = TRUE,
     ignore.case = TRUE
   )
 
-  files <- files[!grepl("^~\\$", basename(files))]
+  files <- files[
+    !grepl("^~\\$", basename(files))
+  ]
 
-  if (!length(files)) return(list())
+  if (!length(files)) {
+    return(list())
+  }
 
-  matches <- lapply(files, read_match_file)
+  out <- lapply(files, read_match)
 
-  matches <- Filter(
-    function(m) is.null(m$error),
-    matches
+  out <- Filter(
+    function(x) is.null(x$error),
+    out
   )
 
-  if (length(matches)) {
-    dates <- vapply(
-      matches,
-      function(m) {
-        if (is.na(m$date)) -Inf else as.numeric(m$date)
+  if (length(out)) {
+
+    ord <- vapply(
+      out,
+      function(x) {
+        if (is.na(x$date)) {
+          -Inf
+        } else {
+          as.numeric(x$date)
+        }
       },
       numeric(1)
     )
 
-    matches <- matches[order(dates, decreasing = TRUE)]
+    out <- out[
+      order(ord, decreasing = TRUE)
+    ]
   }
 
-  matches
+  out
 }
 
-# ---------- Formatting helpers ----------
+# ---------------- HELPERS ----------------
 
 fmt_value <- function(metric, value) {
-  if (!length(value) || is.na(value)) return("—")
 
-  value <- suppressWarnings(as.numeric(value))
+  if (!length(value) || is.na(value)) {
+    return("—")
+  }
 
-  if (is.na(value)) return("—")
+  value <- suppressWarnings(
+    as.numeric(value)
+  )
+
+  if (is.na(value)) {
+    return("—")
+  }
 
   if (grepl(
     "%|Eff|SO|In-System|Aced|Point Scoring|Conversion|Block Impact|First-Ball|First Ball|Opponent Attack",
     metric,
     ignore.case = TRUE
   )) {
-    return(paste0(round(value * 100, 1), "%"))
+    return(
+      paste0(round(value * 100, 1), "%")
+    )
   }
 
   as.character(round(value, 2))
 }
 
-metric_value <- function(match, metric) {
-  row <- match$key %>%
+metric_value <- function(m, metric) {
+
+  x <- m$key |>
     filter(.data$metric == metric)
 
-  if (!nrow(row)) return(NA_real_)
+  if (!nrow(x)) {
+    return(NA_real_)
+  }
 
-  suppressWarnings(as.numeric(row$value[1]))
+  suppressWarnings(
+    as.numeric(x$value[1])
+  )
 }
 
-metric_card <- function(label, value, note = NULL) {
+metric_card <- function(label, value, note = "") {
+
   div(
     class = "metric-card",
     div(class = "metric-label", label),
     div(class = "metric-value", value),
-    if (!is.null(note)) {
-      div(class = "metric-note", note)
-    }
+    div(class = "metric-note", note)
   )
 }
 
-section_header <- function(title, subtitle = "") {
+section_title <- function(title, intro) {
+
   div(
-    class = "page-head",
+    class = "section-block-title",
     h2(title),
-    p(subtitle)
+    p(class = "section-intro", intro)
   )
 }
 
-empty_message <- function(message) {
-  div(class = "empty-state", message)
-}
-
-# ---------- UI ----------
+# ---------------- USER INTERFACE ----------------
 
 ui <- page_fluid(
+
   theme = bs_theme(
     version = 5,
-    bootswatch = "flatly",
-    primary = "#17365D",
-    secondary = "#5B9BD5",
     bg = "#EEF2F5",
-    fg = "#203447"
+    fg = "#263746",
+    primary = "#0B2D59",
+    secondary = "#7D8B99",
+    base_font = font_google("Roboto Condensed"),
+    heading_font = font_google("Oswald")
   ),
 
   tags$head(
+
+    tags$title(
+      "Huskies Coaches Dashboard | Keyano ACAC 2026–27"
+    ),
+
+    tags$link(
+      rel = "stylesheet",
+      type = "text/css",
+      href = "styles.css"
+    ),
+
     tags$style(HTML("
-      body {
-        background: #EEF2F5;
-        color: #203447;
-        font-family: Arial, sans-serif;
+      :root {
+        --orange: #2F75B5;
       }
 
-      .topbar {
-        background: #FFFFFF;
-        border: 1px solid #DFE7EF;
-        border-radius: 18px;
-        padding: 25px 30px;
-        margin: 8px 0 18px;
-        box-shadow: 0 4px 18px rgba(16,42,67,.05);
+      .period-button.active {
+        background: #2F75B5 !important;
       }
 
-      .brand {
-        font-size: 30px;
-        font-weight: 900;
-        letter-spacing: .6px;
-        color: #17365D;
+      .athletes-icon-button:hover,
+      .athletes-icon-button:focus {
+        color: #2F75B5 !important;
       }
 
-      .brand span {
-        color: #5B9BD5;
+      .content-card {
+        min-height: 320px;
       }
 
-      .brand-subtitle {
-        color: #70849A;
-        font-size: 12px;
-        letter-spacing: 2px;
-        margin-top: 5px;
-      }
-
-      .filter-card {
-        background: #FFFFFF;
-        border: 1px solid #DFE7EF;
-        border-radius: 15px;
-        padding: 16px 20px;
+      .analytics-section {
+        padding: 4px 0 26px;
         margin-bottom: 20px;
+        border-bottom: 1px solid #e5ebf0;
       }
 
-      .filter-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        align-items: center;
+      .analytics-section:last-child {
+        border-bottom: 0;
       }
 
-      .filter-row .form-group {
-        margin: 0;
+      .section-block-title {
+        margin: 26px 0 12px;
       }
 
-      .page-head {
-        background: linear-gradient(110deg, #102A43, #174A78);
-        color: white;
-        border-radius: 15px;
-        padding: 22px 26px;
-        margin: 26px 0 16px;
+      .section-block-title h2 {
+        margin-bottom: 4px;
       }
 
-      .page-head h2 {
-        margin: 0;
-        font-size: 28px;
-        font-weight: 800;
-        letter-spacing: .5px;
-      }
-
-      .page-head p {
-        margin: 7px 0 0;
-        color: #D8E9F8;
-      }
-
-      .metric-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
-        gap: 12px;
-        margin: 12px 0 18px;
-      }
-
-      .metric-card {
-        background: #FFFFFF;
-        border: 1px solid #DCE5EE;
-        border-radius: 13px;
-        padding: 16px;
-        min-height: 108px;
-        box-shadow: 0 2px 8px rgba(16,42,67,.035);
-      }
-
-      .metric-label {
-        color: #70849A;
-        font-size: 12px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: .5px;
-      }
-
-      .metric-value {
-        color: #17365D;
-        font-size: 29px;
-        font-weight: 800;
-        margin-top: 9px;
-      }
-
-      .metric-note {
-        color: #70849A;
-        font-size: 11px;
-        margin-top: 4px;
-      }
-
-      .panel-card {
-        background: #FFFFFF;
-        border: 1px solid #DCE5EE;
-        border-radius: 14px;
-        padding: 20px;
-        margin-bottom: 16px;
-        overflow-x: auto;
-      }
-
-      .section-title {
-        color: #17365D;
-        font-weight: 800;
-        margin: 2px 0 14px;
-      }
-
-      .small-muted {
-        color: #70849A;
-        font-size: 12px;
-      }
-
-      .empty-state {
-        background: #F7F9FB;
-        border-radius: 12px;
-        padding: 22px;
-        color: #70849A;
+      .section-block-title p {
+        margin-bottom: 14px;
       }
 
       .status-error {
-        background: #FFF4F2;
-        color: #A33131;
-        padding: 12px 15px;
+        background: #fff1f1;
+        color: #a12626;
+        padding: 12px 14px;
         border-radius: 10px;
         overflow-wrap: anywhere;
       }
 
-      .status-success {
-        background: #EDF7F1;
-        color: #216C47;
+      .status-good {
+        background: #edf7f1;
+        color: #216c47;
         padding: 10px 14px;
         border-radius: 10px;
       }
 
-      .btn-primary {
-        background: #17365D;
-        border-color: #17365D;
+      .chart-card {
+        border: 1px solid #e4e9ee;
+        border-radius: 13px;
+        padding: 16px;
+        margin: 12px 0;
+        background: #fff;
+        overflow-x: auto;
       }
 
-      table {
-        font-size: 13px;
+      .table-wrap {
+        overflow-x: auto;
       }
 
-      .footer {
-        color: #70849A;
-        font-size: 11px;
-        padding: 20px 10px;
+      @media(max-width:700px) {
+        .dashboard-header {
+          grid-template-columns: 1fr !important;
+        }
+
+        .match-summary {
+          text-align: left !important;
+          border-left: 0 !important;
+          padding-left: 0 !important;
+        }
       }
     "))
   ),
 
-  # Header
+  # Original Huskies header
   div(
-    class = "topbar",
+    class = "dashboard-header",
+
     div(
-      class = "brand",
-      HTML("HUSKIES <span>COACHES DASHBOARD</span>")
+      class = "brand-area",
+
+      img(
+        src = "keyano-huskies-logo.png",
+        class = "team-logo",
+        alt = "Keyano Huskies logo"
+      ),
+
+      div(
+        class = "brand-copy",
+
+        h1("HUSKIES COACHES DASHBOARD"),
+
+        div(
+          class = "season-label",
+          "KEYANO · ACAC · 2026–27"
+        )
+      )
     ),
+
     div(
-      class = "brand-subtitle",
-      "KEYANO HUSKIES · ACAC · 2026–27"
+      class = "match-summary",
+
+      div(
+        class = "eyebrow",
+        "LATEST MATCH"
+      ),
+
+      h3(
+        textOutput("latest_match", inline = TRUE)
+      ),
+
+      div(
+        class = "match-detail",
+        textOutput("match_details", inline = TRUE)
+      )
+    ),
+
+    div(
+      class = "athletes-link",
+
+      actionButton(
+        "athletes_nav",
+        label = NULL,
+        icon = icon("grip"),
+        class = "athletes-icon-button"
+      ),
+
+      div(
+        "ATHLETES",
+        class = "athletes-label"
+      )
     )
   ),
 
-  # Match filters
+  # Match-window buttons
   div(
-    class = "filter-card",
-    h4(class = "section-title", "Match Selection"),
-
-    fluidRow(
-      column(
-        4,
-        selectInput(
-          "period",
-          "Match window",
-          choices = c(
-            "Most Recent Match",
-            "Previous Match",
-            "Last 5",
-            "Last 10",
-            "Full Season"
-          ),
-          selected = "Most Recent Match"
-        )
-      ),
-      column(8, uiOutput("match_picker"))
-    ),
-
-    uiOutput("data_status")
+    class = "period-nav",
+    uiOutput("period_buttons")
   ),
 
-  # All sections are stacked vertically
-  uiOutput("overview_ui"),
-  uiOutput("skill_ui"),
-  uiOutput("attack_ui"),
-  uiOutput("rotation_ui"),
-  uiOutput("setting_ui"),
-  uiOutput("passing_ui"),
+  # Single continuous scrolling content area
+  div(
+    class = "content-card",
+    uiOutput("page_content")
+  ),
 
   div(
-    class = "footer",
-    "KEYANO HUSKIES · ACAC · 2026–27 · Internal performance analysis"
+    class = "footer-note",
+    "Keyano Huskies · ACAC · 2026–27 | Internal performance analysis"
   )
 )
 
-# ---------- Server ----------
+# ---------------- SERVER ----------------
 
 server <- function(input, output, session) {
 
+  selected_period <- reactiveVal(
+    "Most Recent Match"
+  )
+
+  show_athletes <- reactiveVal(FALSE)
+
   matches <- reactive({
+
     invalidateLater(60000, session)
+
     load_matches()
   })
 
-  selected_matches <- reactive({
-    ms <- matches()
-    req(length(ms) > 0)
+  period_matches <- reactive({
 
-    n <- length(ms)
-
-    if (input$period == "Most Recent Match") {
-      ms[1]
-    } else if (input$period == "Previous Match") {
-      validate(need(n >= 2, "Upload at least two match workbooks."))
-      ms[2]
-    } else if (input$period == "Last 5") {
-      ms[seq_len(min(5, n))]
-    } else if (input$period == "Last 10") {
-      ms[seq_len(min(10, n))]
-    } else {
-      ms
-    }
-  })
-
-  current_match <- reactive({
-    ms <- selected_matches()
-
-    if (
-      !is.null(input$match_file) &&
-      input$period %in% c("Most Recent Match", "Previous Match")
-    ) {
-      found <- which(vapply(
-        ms,
-        function(m) m$file == input$match_file,
-        logical(1)
-      ))
-
-      if (length(found)) return(ms[[found[1]]])
-    }
-
-    ms[[1]]
-  })
-
-  # Detailed data status
-  output$data_status <- renderUI({
-    files <- if (dir.exists(MATCH_DIR)) {
-      list.files(
-        MATCH_DIR,
-        pattern = "\\.xlsx$",
-        full.names = TRUE,
-        ignore.case = TRUE
-      )
-    } else {
-      character()
-    }
-
-    files <- files[!grepl("^~\\$", basename(files))]
-    ms <- matches()
-
-    if (length(ms)) {
-      return(
-        div(
-          class = "status-success",
-          paste(length(ms), "match workbook(s) loaded successfully.")
-        )
-      )
-    }
-
-    if (!dir.exists(MATCH_DIR)) {
-      return(
-        div(
-          class = "status-error",
-          strong("Match folder not found."),
-          p("Expected folder: data/matches/")
-        )
-      )
-    }
-
-    if (!length(files)) {
-      return(
-        div(
-          class = "status-error",
-          strong("No Excel workbooks found."),
-          p("Add your completed .xlsx match workbooks to data/matches/.")
-        )
-      )
-    }
-
-    errors <- lapply(files, function(f) {
-      tryCatch({
-        sheets <- excel_sheets(f)
-        paste0(
-          basename(f),
-          ": Excel file opens successfully. Sheets: ",
-          paste(sheets, collapse = ", "),
-          ". The workbook parser needs further checking."
-        )
-      }, error = function(e) {
-        paste0(
-          basename(f),
-          ": ",
-          conditionMessage(e)
-        )
-      })
-    })
-
-    div(
-      class = "status-error",
-      strong("Workbook files were found, but none could be loaded."),
-      tags$ul(
-        lapply(errors, tags$li)
-      )
-    )
-  })
-
-  output$match_picker <- renderUI({
     ms <- matches()
 
     if (!length(ms)) {
-      return(helpText("No readable match files available yet."))
+      return(list())
     }
 
-    if (!(input$period %in% c("Most Recent Match", "Previous Match"))) {
-      return(NULL)
-    }
+    n <- length(ms)
 
-    labels <- vapply(ms, function(m) {
-      date_txt <- if (is.na(m$date)) {
+    switch(
+      selected_period(),
+
+      "Most Recent Match" = ms[1],
+
+      "Previous Match" = {
+        if (n >= 2) ms[2] else list()
+      },
+
+      "Last 5" = ms[
+        seq_len(min(5, n))
+      ],
+
+      "Last 10" = ms[
+        seq_len(min(10, n))
+      ],
+
+      "Full Season" = ms,
+
+      ms[1]
+    )
+  })
+
+  current_match <- reactive({
+
+    ms <- period_matches()
+
+    if (length(ms)) {
+      ms[[1]]
+    } else {
+      NULL
+    }
+  })
+
+  # Header latest-match details
+  output$latest_match <- renderText({
+
+    m <- current_match()
+
+    if (is.null(m)) {
+      "Match data not connected yet"
+    } else {
+      m$opponent
+    }
+  })
+
+  output$match_details <- renderText({
+
+    m <- current_match()
+
+    if (is.null(m)) {
+      "Sets · receptions · swings · rallies"
+    } else {
+
+      d <- if (is.na(m$date)) {
         "Date unknown"
       } else {
         format(m$date, "%b %d, %Y")
       }
 
-      paste(date_txt, "—", m$opponent)
-    }, character(1))
+      paste(
+        d,
+        "·",
+        ifelse(
+          is.na(m$result),
+          "Result not recorded",
+          m$result
+        )
+      )
+    }
+  })
 
-    choices <- stats::setNames(
-      vapply(ms, function(m) m$file, character(1)),
-      labels
-    )
+  # Match-window buttons
+  output$period_buttons <- renderUI({
 
-    selectInput(
-      "match_file",
-      "Choose match",
-      choices = choices,
-      selected = ms[[1]]$file
+    div(
+      class = "period-buttons",
+
+      lapply(match_windows, function(period) {
+
+        actionButton(
+          inputId = paste0(
+            "period_",
+            gsub("[^A-Za-z0-9]", "", period)
+          ),
+
+          label = period,
+
+          class = if (
+            identical(selected_period(), period)
+          ) {
+            "period-button active"
+          } else {
+            "period-button"
+          },
+
+          width = "100%"
+        )
+      })
     )
   })
 
-  # ---------- Overview ----------
+  lapply(match_windows, function(period) {
 
-  output$overview_ui <- renderUI({
-    ms <- selected_matches()
+    local({
+
+      this_period <- period
+
+      observeEvent(
+        input[[
+          paste0(
+            "period_",
+            gsub("[^A-Za-z0-9]", "", this_period)
+          )
+        ]],
+
+        {
+          selected_period(this_period)
+          show_athletes(FALSE)
+        }
+      )
+    })
+  })
+
+  observeEvent(
+    input$athletes_nav,
+    {
+      show_athletes(!show_athletes())
+    }
+  )
+
+  # ---------------- PAGE CONTENT ----------------
+
+  output$page_content <- renderUI({
+
+    # Athletes view
+    if (show_athletes()) {
+
+      return(
+        tagList(
+
+          h2("Athletes"),
+
+          p(
+            class = "section-intro",
+            "Season roster. Public-facing names use first names only."
+          ),
+
+          textInput(
+            "athlete_search",
+            "Search athletes",
+            placeholder = "First name, jersey number, or position..."
+          ),
+
+          tableOutput("roster_table")
+        )
+      )
+    }
+
+    ms <- period_matches()
     m <- current_match()
 
-    date_txt <- if (is.na(m$date)) {
-      "Date not entered"
+    # Workbook diagnostics if no match loads
+    if (is.null(m)) {
+
+      files <- if (dir.exists(match_dir)) {
+        list.files(
+          match_dir,
+          pattern = "\\.xlsx$",
+          full.names = TRUE,
+          ignore.case = TRUE
+        )
+      } else {
+        character()
+      }
+
+      files <- files[
+        !grepl("^~\\$", basename(files))
+      ]
+
+      file_errors <- character()
+
+      if (length(files)) {
+
+        for (f in files) {
+
+          err <- tryCatch({
+
+            x <- read_match(f)
+
+            if (!is.null(x$error)) {
+              x$error
+            } else {
+              "Workbook parsed, but no match was returned."
+            }
+
+          }, error = function(e) {
+            conditionMessage(e)
+          })
+
+          file_errors <- c(
+            file_errors,
+            paste0(basename(f), ": ", err)
+          )
+        }
+      }
+
+      return(
+        tagList(
+
+          div(
+            class = "section-heading-row",
+
+            div(
+              h2(selected_period()),
+
+              p(
+                class = "section-intro",
+                "Team performance overview"
+              )
+            ),
+
+            span(
+              class = "data-status",
+              "WAITING FOR MATCH DATA"
+            )
+          ),
+
+          div(
+            class = "placeholder-panel",
+
+            h3("Match data could not be loaded"),
+
+            if (!dir.exists(match_dir)) {
+
+              p(
+                "The data/matches folder is missing from the deployed app."
+              )
+
+            } else if (!length(files)) {
+
+              p(
+                "No .xlsx files were found in data/matches/."
+              )
+
+            } else {
+
+              tagList(
+
+                p(
+                  "The workbook files were found. The exact parsing error is:"
+                ),
+
+                div(
+                  class = "status-error",
+
+                  lapply(
+                    file_errors,
+                    function(x) p(x)
+                  )
+                )
+              )
+            },
+
+            p(
+              "Keep your workbook in data/matches/ and check that the deployment includes the latest committed file."
+            )
+          )
+        )
+      )
+    }
+
+    # Overview metrics
+    date_label <- if (is.na(m$date)) {
+      "Date unknown"
     } else {
-      format(m$date, "%B %d, %Y")
+      format(m$date, "%b %d, %Y")
     }
 
     metric_names <- c(
-      "Side-Out %",
-      "First-Ball SO %",
-      "Point Scoring %",
-      "In-System %",
       "Attack Efficiency",
-      "Block Impact %",
-      "Conversion %",
-      "Opponent Attack Eff"
+      "Side-Out %",
+      "Matches Played",
+      "Last Updated"
     )
 
-    cards <- lapply(metric_names, function(lbl) {
-      metric_card(
-        lbl,
-        fmt_value(lbl, metric_value(m, lbl)),
-        "Selected match"
-      )
-    })
+    metric_values <- c(
+      fmt_value(
+        "Attack Efficiency",
+        metric_value(m, "Attack Efficiency")
+      ),
 
+      fmt_value(
+        "Side-Out %",
+        metric_value(m, "Side-Out %")
+      ),
+
+      as.character(length(matches())),
+
+      date_label
+    )
+
+    # All six analytics sections appear vertically
     tagList(
-      section_header(
-        "MATCH PERFORMANCE",
-        paste(
-          date_txt, "·", m$opponent, "·",
-          ifelse(is.na(m$result), "Result not entered", m$result)
+
+      # 1. Overview
+      div(
+        class = "analytics-section",
+
+        div(
+          class = "section-heading-row",
+
+          div(
+            h2(selected_period()),
+
+            p(
+              class = "section-intro",
+
+              paste(
+                "Team performance overview ·",
+                m$opponent,
+                "·",
+                date_label
+              )
+            )
+          ),
+
+          span(
+            class = "data-status",
+            "MATCH DATA CONNECTED"
+          )
+        ),
+
+        div(
+          class = "metric-grid",
+
+          metric_card(
+            metric_names[1],
+            metric_values[1],
+            "Calculated from match data"
+          ),
+
+          metric_card(
+            metric_names[2],
+            metric_values[2],
+            "Calculated from match data"
+          ),
+
+          metric_card(
+            metric_names[3],
+            metric_values[3],
+            "Season to date"
+          ),
+
+          metric_card(
+            metric_names[4],
+            metric_values[4],
+            "Most recent workbook date"
+          )
+        ),
+
+        div(
+          class = "placeholder-panel",
+
+          h3("Match overview"),
+
+          p(
+            paste(
+              "Opponent:",
+              m$opponent,
+              "· Result:",
+              ifelse(
+                is.na(m$result),
+                "not recorded",
+                m$result
+              )
+            )
+          ),
+
+          p(
+            "The sections below contain the workbook's skill, attack, rotation, setting, and passing data."
+          )
+        ),
+
+        div(
+          class = "chart-card",
+
+          h4("Key metrics"),
+
+          tableOutput("key_table")
         )
       ),
 
-      div(class = "metric-grid", cards),
+      # 2. By Skill
+      div(
+        class = "analytics-section",
 
-      fluidRow(
-        column(
-          6,
-          div(
-            class = "panel-card",
-            h4(class = "section-title", "Keyano at a glance"),
-            p(strong("Match window: "), input$period),
-            p(strong("Matches included: "), length(ms)),
-            p(
-              class = "small-muted",
-              "Metric cards reflect the selected reference match."
+        section_title(
+          "BY SKILL",
+          "Attack, blocking, serving, reception and other skill totals from the workbook."
+        ),
+
+        div(
+          class = "chart-card",
+          plotOutput("skill_plot", height = 300)
+        ),
+
+        div(
+          class = "chart-card table-wrap",
+          tableOutput("skill_table")
+        )
+      ),
+
+      # 3. Attack Detail
+      div(
+        class = "analytics-section",
+
+        section_title(
+          "ATTACK DETAIL",
+          "First-ball and transition attack by attack type."
+        ),
+
+        div(
+          class = "chart-card",
+          plotOutput("attack_plot", height = 320)
+        ),
+
+        div(
+          class = "chart-card table-wrap",
+          tableOutput("attack_table")
+        )
+      ),
+
+      # 4. Rotation Details
+      div(
+        class = "analytics-section",
+
+        section_title(
+          "ROTATION DETAILS",
+          "Serve, reception and rotation outcomes."
+        ),
+
+        div(
+          class = "chart-card",
+          plotOutput("rotation_plot", height = 320)
+        ),
+
+        div(
+          class = "chart-card table-wrap",
+          tableOutput("rotation_table")
+        )
+      ),
+
+      # 5. Setting Stats
+      div(
+        class = "analytics-section",
+
+        section_title(
+          "SETTING STATS",
+          "Rotation distribution and who sets on first-ball and transition."
+        ),
+
+        div(
+          class = "chart-card",
+
+          h4("Rotation setting totals"),
+
+          tableOutput("rotation_setting_table")
+        ),
+
+        fluidRow(
+
+          column(
+            6,
+
+            div(
+              class = "chart-card",
+
+              h4("Who Sets · First Ball"),
+
+              tableOutput("fb_table")
+            )
+          ),
+
+          column(
+            6,
+
+            div(
+              class = "chart-card",
+
+              h4("Who Sets · Transition"),
+
+              tableOutput("trans_table")
             )
           )
+        )
+      ),
+
+      # 6. Passing by Contact Point
+      div(
+        class = "analytics-section",
+
+        section_title(
+          "PASSING BY CONTACT POINT",
+          "Reception outcomes by player and contact point."
         ),
-        column(
-          6,
-          div(
-            class = "panel-card",
-            h4(class = "section-title", "Set score"),
-            uiOutput("score_ui")
+
+        uiOutput("passing_player_ui"),
+
+        div(
+          class = "chart-card",
+          plotOutput("passing_plot", height = 300)
+        ),
+
+        div(
+          class = "chart-card table-wrap",
+          tableOutput("passing_table")
+        )
+      )
+    )
+  })
+
+  # ---------------- ATHLETES TABLE ----------------
+
+  output$roster_table <- renderTable({
+
+    search <- if (is.null(input$athlete_search)) {
+      ""
+    } else {
+      tolower(input$athlete_search)
+    }
+
+    roster |>
+      filter(
+        grepl(
+          search,
+          tolower(
+            paste(FirstName, Jersey, Position)
           )
         )
-      ),
-
-      div(
-        class = "panel-card",
-        h4(class = "section-title", "Key metric trend across included matches"),
-        plotOutput("trend_plot", height = 300)
+      ) |>
+      rename(
+        `Jersey #` = Jersey,
+        `First Name` = FirstName
       )
-    )
-  })
 
-  output$score_ui <- renderUI({
+  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s")
+
+  # ---------------- KEY METRICS ----------------
+
+  output$key_table <- renderTable({
+
     m <- current_match()
+    req(m)
 
-    info <- read_excel(
-      m$path,
-      sheet = "Match Information",
-      col_names = FALSE
-    )
-
-    row <- which(as.character(info[[1]]) == "Sets won and lost")
-
-    if (!length(row)) return(p("Set score not entered."))
-
-    keyano <- suppressWarnings(
-      as.numeric(unlist(info[row[1], 2:4], use.names = FALSE))
-    )
-
-    opp <- suppressWarnings(
-      as.numeric(unlist(
-        info[min(row[1] + 1, nrow(info)), 2:4],
-        use.names = FALSE
-      ))
-    )
-
-    keep <- !is.na(keyano) & !is.na(opp)
-    keyano <- keyano[keep]
-    opp <- opp[keep]
-
-    tagList(
-      div(
-        style = "display:flex;justify-content:space-between;gap:18px;align-items:center;flex-wrap:wrap;",
-        div(
-          h5("KEYANO", style = "font-weight:800;color:#17365D;"),
-          h2(sum(keyano > opp), style = "font-weight:900;")
-        ),
-        div(
-          h5("SET SCORES", style = "font-weight:800;color:#70849A;"),
-          p(
-            paste(paste0(keyano, "–", opp), collapse = " · "),
-            style = "font-weight:700;font-size:18px;"
-          )
-        ),
-        div(
-          h5("OPPONENT", style = "font-weight:800;color:#70849A;"),
-          h2(sum(opp > keyano), style = "font-weight:900;")
-        )
+    m$key |>
+      rename(
+        Metric = metric,
+        Value = value
       )
-    )
-  })
 
-  output$trend_plot <- renderPlot({
-    ms <- selected_matches()
+  }, striped = TRUE, bordered = FALSE, spacing = "s")
 
-    wanted <- c(
-      "Side-Out %",
-      "First-Ball SO %",
-      "Point Scoring %",
-      "In-System %",
-      "Attack Efficiency",
-      "Block Impact %"
-    )
-
-    dat <- bind_rows(lapply(ms, function(m) {
-      tibble(
-        Match = if (is.na(m$date)) {
-          m$opponent
-        } else {
-          paste(format(m$date, "%b %d"), m$opponent)
-        },
-        Metric = wanted,
-        Value = vapply(
-          wanted,
-          function(x) metric_value(m, x),
-          numeric(1)
-        )
-      )
-    })) %>%
-      filter(!is.na(Value))
-
-    validate(need(
-      nrow(dat) > 0,
-      "No trend metrics available in the selected match window."
-    ))
-
-    dat$Metric <- factor(dat$Metric, levels = wanted)
-
-    ggplot(
-      dat,
-      aes(
-        x = Match,
-        y = Value,
-        group = Metric,
-        color = Metric
-      )
-    ) +
-      geom_line(linewidth = 1, na.rm = TRUE) +
-      geom_point(size = 2.5) +
-      scale_y_continuous(
-        labels = function(x) paste0(round(x * 100), "%")
-      ) +
-      labs(x = NULL, y = "Rate", color = NULL) +
-      theme_minimal(base_size = 12) +
-      theme(
-        axis.text.x = element_text(angle = 25, hjust = 1),
-        legend.position = "bottom",
-        panel.grid.minor = element_blank()
-      )
-  })
-
-  # ---------- By Skill ----------
-
-  output$skill_ui <- renderUI({
-    m <- current_match()
-
-    tagList(
-      section_header(
-        "BY SKILL",
-        paste("Performance breakdown ·", m$opponent)
-      ),
-      div(
-        class = "panel-card",
-        plotOutput("skill_plot", height = 320)
-      ),
-      div(
-        class = "panel-card",
-        h4(class = "section-title", "Skill breakdown"),
-        tableOutput("skill_table")
-      )
-    )
-  })
+  # ---------------- BY SKILL ----------------
 
   output$skill_plot <- renderPlot({
-    d <- current_match()$skills %>%
+
+    m <- current_match()
+    req(m)
+
+    d <- m$skills |>
       filter(!is.na(value))
 
-    validate(need(nrow(d) > 0, "No By Skill data found."))
+    validate(
+      need(nrow(d) > 0, "No By Skill data found.")
+    )
 
     ggplot(
       d,
-      aes(x = reorder(metric, value), y = value, fill = skill)
+      aes(
+        x = reorder(metric, value),
+        y = value,
+        fill = skill
+      )
     ) +
-      geom_col() +
+      geom_col(show.legend = FALSE) +
       coord_flip() +
       facet_wrap(~skill, scales = "free_y") +
-      labs(x = NULL, y = "Count / workbook value", fill = NULL) +
-      theme_minimal(base_size = 12) +
-      theme(
-        legend.position = "none",
-        panel.grid.minor = element_blank()
-      )
+      labs(
+        x = NULL,
+        y = "Workbook value"
+      ) +
+      theme_minimal(base_size = 12)
   })
 
   output$skill_table <- renderTable({
-    current_match()$skills %>%
-      filter(!is.na(value)) %>%
+
+    m <- current_match()
+    req(m)
+
+    m$skills |>
       rename(
         Skill = skill,
         Metric = metric,
         Value = value
       )
+
   }, striped = TRUE, bordered = FALSE, spacing = "s")
 
-  # ---------- Attack Detail ----------
-
-  output$attack_ui <- renderUI({
-    tagList(
-      section_header(
-        "ATTACK DETAIL",
-        "First-ball and transition attack by attack type."
-      ),
-      div(
-        class = "panel-card",
-        plotOutput("attack_plot", height = 360)
-      ),
-      div(
-        class = "panel-card",
-        tableOutput("attack_table")
-      )
-    )
-  })
+  # ---------------- ATTACK DETAIL ----------------
 
   output$attack_plot <- renderPlot({
-    d <- current_match()$attack
 
-    validate(need(
-      all(c("Attempts", "Attack Type") %in% names(d)),
-      "Required attack columns are missing."
-    ))
+    m <- current_match()
+    req(m)
 
-    d <- d %>% filter(!is.na(Attempts), Attempts > 0)
+    d <- m$attack
 
-    validate(need(nrow(d) > 0, "No attack attempts found."))
+    validate(
+      need(
+        all(c("Attack Type", "Attempts") %in% names(d)),
+        "Attack columns are missing."
+      )
+    )
+
+    d <- d |>
+      filter(
+        !is.na(Attempts),
+        Attempts > 0
+      )
+
+    validate(
+      need(nrow(d) > 0, "No attack attempts found.")
+    )
 
     if (!"Previous Play" %in% names(d)) {
       d$`Previous Play` <- "All"
@@ -1025,230 +1303,264 @@ server <- function(input, output, session) {
 
     ggplot(
       d,
-      aes(x = `Attack Type`, y = Attempts, fill = `Previous Play`)
+      aes(
+        x = `Attack Type`,
+        y = Attempts,
+        fill = `Previous Play`
+      )
     ) +
       geom_col(position = "dodge") +
-      labs(x = NULL, y = "Attempts", fill = NULL) +
+      labs(
+        x = NULL,
+        y = "Attempts",
+        fill = NULL
+      ) +
       theme_minimal(base_size = 12) +
       theme(
-        axis.text.x = element_text(angle = 30, hjust = 1),
-        panel.grid.minor = element_blank(),
-        legend.position = "bottom"
+        axis.text.x = element_text(
+          angle = 30,
+          hjust = 1
+        )
       )
   })
 
   output$attack_table <- renderTable({
-    d <- current_match()$attack
+
+    m <- current_match()
+    req(m)
+
+    m$attack
+
+  }, striped = TRUE, bordered = FALSE, spacing = "s")
+
+  # ---------------- ROTATION DETAILS ----------------
+
+  output$rotation_plot <- renderPlot({
+
+    m <- current_match()
+    req(m)
+
+    d <- m$rotation
+
+    validate(
+      need(
+        "Rotation" %in% names(d),
+        "Rotation column is missing."
+      )
+    )
 
     cols <- intersect(
-      c(
-        "Attack Type", "Previous Play", "Attempts", "Kills",
-        "Error", "FB Eff.", "Transition Eff.", "Total Eff."
-      ),
+      c("SO%", "PS%", "Serve In %"),
       names(d)
     )
 
-    d %>% select(all_of(cols))
-  }, striped = TRUE, bordered = FALSE, spacing = "s")
-
-  # ---------- Rotation Details ----------
-
-  output$rotation_ui <- renderUI({
-    tagList(
-      section_header(
-        "ROTATION DETAILS",
-        "Serve, reception and attack performance across rotations."
-      ),
-      div(
-        class = "panel-card",
-        plotOutput("rotation_plot", height = 330)
-      ),
-      div(
-        class = "panel-card",
-        tableOutput("rotation_table")
+    validate(
+      need(
+        length(cols) > 0,
+        "No rotation rate columns found."
       )
     )
-  })
 
-  output$rotation_plot <- renderPlot({
-    d <- current_match()$rotation
-
-    validate(need(
-      "Rotation" %in% names(d),
-      "Rotation data is not available."
-    ))
-
-    rate_col <- intersect(c("SO%", "PS%", "H %"), names(d))
-
-    validate(need(
-      length(rate_col) > 0,
-      "No rotation rate columns found."
-    ))
-
-    dd <- d %>%
-      select(Rotation, all_of(rate_col)) %>%
+    long <- d |>
+      select(
+        Rotation,
+        all_of(cols)
+      ) |>
       pivot_longer(
         -Rotation,
         names_to = "Metric",
         values_to = "Value"
-      ) %>%
-      mutate(Value = suppressWarnings(as.numeric(Value))) %>%
+      ) |>
+      mutate(
+        Value = suppressWarnings(
+          as.numeric(Value)
+        )
+      ) |>
       filter(!is.na(Value))
 
-    validate(need(nrow(dd) > 0, "No rotation values available."))
+    validate(
+      need(
+        nrow(long) > 0,
+        "No rotation values found."
+      )
+    )
 
-    ggplot(dd, aes(x = Rotation, y = Value, fill = Metric)) +
+    ggplot(
+      long,
+      aes(
+        x = Rotation,
+        y = Value,
+        fill = Metric
+      )
+    ) +
       geom_col(position = "dodge") +
       scale_y_continuous(
-        labels = function(x) paste0(round(x * 100), "%")
+        labels = scales::percent_format(accuracy = 1)
       ) +
-      labs(x = NULL, y = "Rate", fill = NULL) +
+      labs(
+        x = NULL,
+        y = "Rate",
+        fill = NULL
+      ) +
       theme_minimal(base_size = 12) +
-      theme(legend.position = "bottom")
+      theme(
+        legend.position = "bottom"
+      )
   })
 
   output$rotation_table <- renderTable({
-    current_match()$rotation
+
+    m <- current_match()
+    req(m)
+
+    m$rotation
+
   }, striped = TRUE, bordered = FALSE, spacing = "s")
 
-  # ---------- Setting Stats ----------
+  # ---------------- SETTING STATS ----------------
 
-  output$setting_ui <- renderUI({
-    tagList(
-      section_header(
-        "SETTING STATS",
-        "Who sets the ball and what happens after the set."
-      ),
-      fluidRow(
-        column(
-          6,
-          div(
-            class = "panel-card",
-            h4(class = "section-title", "First-ball sets"),
-            tableOutput("fb_table")
-          )
-        ),
-        column(
-          6,
-          div(
-            class = "panel-card",
-            h4(class = "section-title", "Transition sets"),
-            tableOutput("trans_table")
-          )
-        )
-      )
-    )
-  })
+  output$rotation_setting_table <- renderTable({
+
+    m <- current_match()
+    req(m)
+
+    m$rotation_setting
+
+  }, striped = TRUE, bordered = FALSE, spacing = "s")
 
   output$fb_table <- renderTable({
-    current_match()$fb_sets
+
+    m <- current_match()
+    req(m)
+
+    m$fb_sets
+
   }, striped = TRUE, bordered = FALSE, spacing = "s")
 
   output$trans_table <- renderTable({
-    current_match()$trans_sets
+
+    m <- current_match()
+    req(m)
+
+    m$trans_sets
+
   }, striped = TRUE, bordered = FALSE, spacing = "s")
 
-  # ---------- Passing by Contact Point ----------
+  # ---------------- PASSING BY CONTACT POINT ----------------
 
-  output$passing_ui <- renderUI({
-    tagList(
-      section_header(
-        "PASSING BY CONTACT POINT",
-        "Reception outcomes by player and contact point."
-      ),
-      div(
-        class = "panel-card",
-        selectInput("pass_player", "Player", choices = NULL)
-      ),
-      div(
-        class = "panel-card",
-        plotOutput("passing_plot", height = 330)
-      ),
-      div(
-        class = "panel-card",
-        tableOutput("passing_table")
+  output$passing_player_ui <- renderUI({
+
+    m <- current_match()
+
+    if (
+      is.null(m) ||
+      !all(
+        c("Player No.", "Player Name") %in% names(m$passing)
       )
+    ) {
+      return(NULL)
+    }
+
+    players <- unique(
+      paste0(
+        m$passing$`Player No.`,
+        " · ",
+        m$passing$`Player Name`
+      )
+    )
+
+    selectInput(
+      "pass_player",
+      "Player",
+      choices = players,
+      selected = if (length(players)) players[1] else NULL
     )
   })
 
-  observeEvent(current_match(), {
-    d <- current_match()$passing
+  passing_data <- reactive({
 
-    if (
-      all(c("Player No.", "Player Name") %in% names(d))
-    ) {
-      players <- unique(
-        paste0(d$`Player No.`, " · ", d$`Player Name`)
+    m <- current_match()
+
+    req(m, input$pass_player)
+
+    d <- m$passing
+
+    validate(
+      need(
+        all(
+          c("Player No.", "Player Name") %in% names(d)
+        ),
+        "Player columns missing."
       )
+    )
 
-      updateSelectInput(
-        session,
-        "pass_player",
-        choices = players,
-        selected = if (length(players)) players[1] else character(0)
-      )
-    }
-  }, ignoreInit = FALSE)
-
-  passing_filtered <- reactive({
-    d <- current_match()$passing
-
-    req(input$pass_player)
-
-    validate(need(
-      all(c("Player No.", "Player Name") %in% names(d)),
-      "Player columns are missing from the passing worksheet."
-    ))
-
-    d %>%
+    d |>
       filter(
-        paste0(`Player No.`, " · ", `Player Name`) == input$pass_player
+        paste0(
+          `Player No.`,
+          " · ",
+          `Player Name`
+        ) == input$pass_player
       )
   })
 
   output$passing_plot <- renderPlot({
-    d <- passing_filtered()
 
-    validate(need(
-      all(c("Contact Point", "Total Pass") %in% names(d)),
-      "Contact Point or Total Pass columns are missing."
-    ))
+    d <- passing_data()
 
-    d <- d %>% filter(!is.na(`Total Pass`))
+    validate(
+      need(
+        all(
+          c("Contact Point", "Total Pass") %in% names(d)
+        ),
+        "Passing columns missing."
+      )
+    )
 
-    validate(need(
-      nrow(d) > 0,
-      "No passing data found for this player."
-    ))
+    d <- d |>
+      mutate(
+        `Total Pass` = suppressWarnings(
+          as.numeric(`Total Pass`)
+        )
+      ) |>
+      filter(!is.na(`Total Pass`))
 
-    ggplot(d, aes(x = `Contact Point`, y = `Total Pass`)) +
+    validate(
+      need(
+        nrow(d) > 0,
+        "No passing data for this player."
+      )
+    )
+
+    ggplot(
+      d,
+      aes(
+        x = `Contact Point`,
+        y = `Total Pass`
+      )
+    ) +
       geom_col(fill = "#2F75B5") +
       geom_text(
         aes(label = `Total Pass`),
-        vjust = -0.35,
-        fontface = "bold"
+        vjust = -0.3
       ) +
-      labs(x = NULL, y = "Total Pass") +
+      labs(
+        x = NULL,
+        y = "Total Pass"
+      ) +
       theme_minimal(base_size = 12) +
       theme(
-        axis.text.x = element_text(angle = 20, hjust = 1),
-        panel.grid.minor = element_blank()
+        axis.text.x = element_text(
+          angle = 20,
+          hjust = 1
+        )
       )
   })
 
   output$passing_table <- renderTable({
-    d <- passing_filtered()
 
-    cols <- intersect(
-      c(
-        "Player No.", "Player Name", "Position",
-        "Contact Point", "Total Pass", "Good Pass",
-        "Aced", "GP %", "Aced %"
-      ),
-      names(d)
-    )
+    passing_data()
 
-    d %>% select(all_of(cols))
   }, striped = TRUE, bordered = FALSE, spacing = "s")
 }
 
