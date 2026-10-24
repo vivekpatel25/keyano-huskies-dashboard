@@ -1,37 +1,343 @@
-:root { --navy: #0b2d59; --ink: #263746; --muted: #7d8b99; --orange: #c45a00; --surface: #ffffff; }
-body { background: #eef2f5; color: var(--ink); }
-.container-fluid { max-width: 1600px; padding: 18px 20px 28px; }
-.dashboard-header { display: grid; grid-template-columns: minmax(420px, 1.5fr) minmax(280px, 0.9fr) 110px; align-items: center; gap: 24px; background: var(--surface); border-radius: 20px; padding: 22px 28px; box-shadow: 0 8px 22px rgba(25,45,65,.09); margin-bottom: 16px; }
-.brand-area { display: flex; align-items: center; gap: 24px; min-width: 0; }
-.team-logo { width: 150px; height: 105px; object-fit: contain; flex: 0 0 auto; }
-.brand-copy h1 { font-family: 'Oswald', sans-serif; font-size: clamp(26px, 3vw, 44px); font-weight: 700; line-height: .98; margin: 0; letter-spacing: .2px; }
-.season-label { color: var(--muted); font-size: 13px; letter-spacing: 1.7px; margin-top: 9px; }
-.match-summary { border-left: 1px solid #e0e5ea; padding-left: 28px; text-align: right; }
-.eyebrow { font-size: 12px; letter-spacing: 1.2px; color: var(--muted); }
-.match-summary h3 { font-family: 'Oswald', sans-serif; font-size: 21px; margin: 3px 0; font-weight: 600; }
-.match-detail { color: var(--muted); font-size: 12px; }
-.athletes-link { border-left: 1px solid #e0e5ea; padding-left: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-.athletes-icon-button { color: #3b4853; background: transparent; border: 0; font-size: 28px; padding: 0 12px; box-shadow: none !important; }
-.athletes-icon-button:hover, .athletes-icon-button:focus { color: var(--orange); background: transparent; }
-.athletes-label { font-family: 'Oswald', sans-serif; color: var(--muted); font-size: 12px; letter-spacing: .7px; margin-top: 2px; }
-.period-nav { background: white; border: 1px solid #dce3e9; border-radius: 16px; padding: 8px; box-shadow: 0 5px 14px rgba(25,45,65,.08); margin-bottom: 16px; }
-.period-buttons { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-.period-button { border: 0; background: transparent; color: #607080; border-radius: 10px; padding: 15px 8px; min-height: 56px; text-transform: uppercase; font-family: 'Oswald', sans-serif; font-weight: 600; letter-spacing: .3px; }
-.period-button:hover { background: #f4f6f8; color: var(--navy); }
-.period-button.active { background: var(--orange); color: white; }
-.content-card { background: white; border: 1px solid #e0e5ea; border-radius: 18px; padding: 24px; box-shadow: 0 5px 14px rgba(25,45,65,.05); min-height: 320px; }
-.section-heading-row { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
-h2 { font-family: 'Oswald', sans-serif; font-size: 27px; margin: 0 0 5px; }
-.section-intro { color: var(--muted); margin-bottom: 18px; }
-.data-status { color: #8a5b18; background: #fff3df; border-radius: 20px; padding: 7px 11px; font-size: 10px; font-weight: 700; letter-spacing: .7px; white-space: nowrap; }
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 20px 0; }
-.metric-card { border: 1px solid #e4e9ee; border-radius: 13px; padding: 17px; background: #fbfcfd; }
-.metric-label { font-size: 11px; color: var(--muted); letter-spacing: .8px; font-weight: 700; }
-.metric-value { font-family: 'Oswald', sans-serif; font-size: 32px; font-weight: 600; margin: 5px 0; }
-.metric-note { color: var(--muted); font-size: 11px; }
-.placeholder-panel { background: #f7f9fb; border-radius: 13px; padding: 22px; margin-top: 18px; }
-.placeholder-panel h3 { font-family: 'Oswald', sans-serif; margin-top: 0; }
-.footer-note { text-align: center; color: #8a96a1; font-size: 11px; margin-top: 16px; }
-.table { --bs-table-bg: transparent; }
-@media (max-width: 900px) { .dashboard-header { grid-template-columns: 1fr auto; gap: 14px; padding: 18px; } .brand-area { gap: 14px; } .team-logo { width: 95px; height: 75px; } .match-summary { grid-column: 1 / 2; border-left: 0; padding-left: 0; text-align: left; } .athletes-link { grid-column: 2; grid-row: 1 / span 2; } .metric-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
-@media (max-width: 600px) { .container-fluid { padding: 10px; } .dashboard-header { grid-template-columns: 1fr; } .brand-copy h1 { font-size: 28px; } .team-logo { width: 76px; height: 66px; } .match-summary { text-align: left; } .athletes-link { grid-column: auto; grid-row: auto; border-left: 0; padding-left: 0; flex-direction: row; gap: 8px; justify-content: flex-start; } .period-buttons { grid-template-columns: repeat(2, minmax(0,1fr)); } .period-button:last-child { grid-column: 1 / -1; } .metric-grid { grid-template-columns: 1fr 1fr; } .content-card { padding: 16px; } .section-heading-row { flex-direction: column; } }
+
+:root {
+  --navy: #0b2d59;
+  --ink: #263746;
+  --muted: #7d8b99;
+  --accent: #0b2d59;
+  --accent-light: #e8eef7;
+  --surface: #ffffff;
+}
+
+body {
+  background: #eef2f5;
+  color: var(--ink);
+}
+
+.container-fluid {
+  max-width: 1600px;
+  padding: 18px 20px 28px;
+}
+
+.dashboard-header {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.5fr) minmax(280px, 0.9fr) 110px;
+  align-items: center;
+  gap: 24px;
+  background: var(--surface);
+  border-radius: 20px;
+  padding: 22px 28px;
+  box-shadow: 0 8px 22px rgba(25, 45, 65, 0.09);
+  margin-bottom: 16px;
+}
+
+.brand-area {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  min-width: 0;
+}
+
+.team-logo {
+  width: 150px;
+  height: 105px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.brand-copy h1 {
+  font-family: 'Oswald', sans-serif;
+  font-size: clamp(26px, 3vw, 44px);
+  font-weight: 700;
+  line-height: 0.98;
+  margin: 0;
+  letter-spacing: 0.2px;
+}
+
+.season-label {
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 1.7px;
+  margin-top: 9px;
+}
+
+.match-summary {
+  border-left: 1px solid #e0e5ea;
+  padding-left: 28px;
+  text-align: right;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+}
+
+.match-summary h3 {
+  font-family: 'Oswald', sans-serif;
+  font-size: 21px;
+  margin: 3px 0;
+  font-weight: 600;
+}
+
+.match-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.athletes-link {
+  border-left: 1px solid #e0e5ea;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.athletes-icon-button {
+  color: var(--navy);
+  background: transparent;
+  border: 0;
+  font-size: 28px;
+  padding: 0 12px;
+  box-shadow: none !important;
+}
+
+.athletes-icon-button:hover,
+.athletes-icon-button:focus {
+  color: #244d80;
+  background: transparent;
+}
+
+.athletes-label {
+  font-family: 'Oswald', sans-serif;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.7px;
+  margin-top: 2px;
+}
+
+.period-nav {
+  background: white;
+  border: 1px solid #dce3e9;
+  border-radius: 16px;
+  padding: 8px;
+  box-shadow: 0 5px 14px rgba(25, 45, 65, 0.08);
+  margin-bottom: 16px;
+}
+
+.period-buttons {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.period-button {
+  border: 0;
+  background: transparent;
+  color: #607080;
+  border-radius: 10px;
+  padding: 15px 8px;
+  min-height: 56px;
+  text-transform: uppercase;
+  font-family: 'Oswald', sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.period-button:hover {
+  background: var(--accent-light);
+  color: var(--navy);
+}
+
+.period-button.active {
+  background: var(--navy);
+  color: #ffffff;
+}
+
+.content-card {
+  background: white;
+  border: 1px solid #e0e5ea;
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: 0 5px 14px rgba(25, 45, 65, 0.05);
+  min-height: 320px;
+}
+
+.section-heading-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+h2 {
+  font-family: 'Oswald', sans-serif;
+  font-size: 27px;
+  margin: 0 0 5px;
+}
+
+.section-intro {
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+
+.data-status {
+  color: var(--navy);
+  background: var(--accent-light);
+  border: 1px solid #d5e0f0;
+  border-radius: 20px;
+  padding: 7px 11px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  white-space: nowrap;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin: 20px 0;
+}
+
+.metric-card {
+  border: 1px solid #e4e9ee;
+  border-radius: 13px;
+  padding: 17px;
+  background: #fbfcfd;
+}
+
+.metric-label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.8px;
+  font-weight: 700;
+}
+
+.metric-value {
+  font-family: 'Oswald', sans-serif;
+  font-size: 32px;
+  font-weight: 600;
+  margin: 5px 0;
+}
+
+.metric-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.placeholder-panel {
+  background: #f7f9fb;
+  border-radius: 13px;
+  padding: 22px;
+  margin-top: 18px;
+}
+
+.placeholder-panel h3 {
+  font-family: 'Oswald', sans-serif;
+  margin-top: 0;
+}
+
+.footer-note {
+  text-align: center;
+  color: #8a96a1;
+  font-size: 11px;
+  margin-top: 16px;
+}
+
+.table {
+  --bs-table-bg: transparent;
+}
+
+.btn:focus-visible,
+.period-button:focus-visible,
+.athletes-icon-button:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 3px;
+}
+
+@media (max-width: 900px) {
+  .dashboard-header {
+    grid-template-columns: 1fr auto;
+    gap: 14px;
+    padding: 18px;
+  }
+
+  .brand-area {
+    gap: 14px;
+  }
+
+  .team-logo {
+    width: 95px;
+    height: 75px;
+  }
+
+  .match-summary {
+    grid-column: 1 / 2;
+    border-left: 0;
+    padding-left: 0;
+    text-align: left;
+  }
+
+  .athletes-link {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .container-fluid {
+    padding: 10px;
+  }
+
+  .dashboard-header {
+    grid-template-columns: 1fr;
+  }
+
+  .brand-copy h1 {
+    font-size: 28px;
+  }
+
+  .team-logo {
+    width: 76px;
+    height: 66px;
+  }
+
+  .match-summary {
+    text-align: left;
+  }
+
+  .athletes-link {
+    grid-column: auto;
+    grid-row: auto;
+    border-left: 0;
+    padding-left: 0;
+    flex-direction: row;
+    gap: 8px;
+    justify-content: flex-start;
+  }
+
+  .period-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .period-button:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .metric-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .content-card {
+    padding: 16px;
+  }
+
+  .section-heading-row {
+    flex-direction: column;
+  }
+}
