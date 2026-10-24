@@ -1,0 +1,15 @@
+
+Package: keyanohuskiesdashboard
+Title: Keyano Huskies Coaches Dashboard
+Version: 0.1.0
+Description: Shiny dashboard for Keyano Huskies volleyball match analysis.
+License: MIT
+Encoding: UTF-8
+Imports:
+    shiny,
+    bslib,
+    readxl,
+    dplyr,
+    tidyr,
+    ggplot2,
+    readr
