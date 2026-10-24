@@ -1,6 +1,8 @@
 # Huskies Coaches Dashboard
 # Place this file at the root of your GitHub repository as app.R.
 # Required packages: shiny, bslib, readxl, dplyr, ggplot2
+# Dependencies for Posit Connect Cloud
+# install.packages(c("readxl", "tidyr", "ggplot2"))
 
 library(shiny)
 library(bslib)
