@@ -143,28 +143,25 @@ read_match <- function(path) {
 
       as.character(val)
     }
+        date_val <- get_info("Match date")
 
-   
-date_val <- get_info("Match date")
+    match_date <- parse_match_date(date_val)
 
-match_date <- parse_match_date(date_val)
+    # If the workbook date is missing, try the date in the filename.
+    if (is.na(match_date)) {
+      filename_date <- sub(
+        "^([0-9]{4}-[0-9]{2}-[0-9]{2}).*$",
+        "\\1",
+        basename(path)
+      )
 
-# If the workbook date is missing, try the date in the filename.
-if (is.na(match_date)) {
-  filename_date <- sub(
-    "^([0-9]{4}-[0-9]{2}-[0-9]{2}).*$",
-    "\\1",
-    basename(path)
-  )
-
-  if (grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", filename_date)) {
-    match_date <- as.Date(
-      filename_date,
-      format = "%Y-%m-%d"
-    )
-  }
-}
-
+      if (grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}$", filename_date)) {
+        match_date <- as.Date(
+          filename_date,
+          format = "%Y-%m-%d"
+        )
+      }
+    }
 
     opponent <- get_info("Opponent")
 
@@ -204,7 +201,6 @@ if (is.na(match_date)) {
     section <- NA_character_
 
     for (i in seq_len(nrow(bs))) {
-
       a <- bs[[1]][i]
       b <- bs[[2]][i]
       c <- bs[[3]][i]
@@ -214,15 +210,12 @@ if (is.na(match_date)) {
         (is.na(b) || identical(as.character(b), "")) &&
         (is.na(c) || identical(as.character(c), ""))
       ) {
-
         section <- as.character(a)
-
       } else if (
         !is.na(b) &&
         !is.na(c) &&
         !is.na(section)
       ) {
-
         skill_rows[[length(skill_rows) + 1]] <- tibble(
           skill = section,
           metric = as.character(b),
@@ -278,11 +271,7 @@ if (is.na(match_date)) {
         )
     }
 
-    # Setting Stats:
-    # Rows 1-8: rotation totals
-    # Rows 10-13: first-ball setting
-    # Rows 15-18: transition setting
-
+    # Setting Stats
     setting_raw <- read_excel(
       path,
       sheet = "Setting Stats",
@@ -294,7 +283,6 @@ if (is.na(match_date)) {
       first_row,
       last_row
     ) {
-
       header <- as.character(
         unlist(
           setting_raw[header_row, 1:8],
@@ -373,7 +361,6 @@ if (is.na(match_date)) {
     )
 
   }, error = function(e) {
-
     message(
       "Workbook error [",
       basename(path),
@@ -397,7 +384,6 @@ if (is.na(match_date)) {
 # ---------------- LOAD MATCHES ----------------
 
 load_matches <- function() {
-
   if (!dir.exists(match_dir)) {
     return(list())
   }
@@ -425,7 +411,6 @@ load_matches <- function() {
   )
 
   if (length(out)) {
-
     ord <- vapply(
       out,
       function(x) {
@@ -449,34 +434,54 @@ load_matches <- function() {
 # ---------------- HELPERS ----------------
 
 fmt_value <- function(metric, value) {
-
   if (!length(value) || is.na(value)) {
     return("—")
   }
 
-  value <- suppressWarnings(
-    as.numeric(value)
-  )
+  value <- suppressWarnings(as.numeric(value))
 
   if (is.na(value)) {
     return("—")
   }
 
+  metric_name <- as.character(metric)[1]
+
   if (grepl(
-    "%|Eff|SO|In-System|Aced|Point Scoring|Conversion|Block Impact|First-Ball|First Ball|Opponent Attack",
-    metric,
+    "efficiency|\\beff\\b|attack eff",
+    metric_name,
     ignore.case = TRUE
   )) {
-    return(
-      paste0(round(value * 100, 1), "%")
-    )
+    if (abs(value) < 1) {
+      return(sub("^0", "", sprintf("%.3f", value)))
+    }
+
+    return(sprintf("%.3f", value))
+  }
+
+  is_percentage <- grepl(
+    "%|in-system|aced|point scoring|conversion|block impact|first[- ]?ball|opponent attack|disruption|side[- ]?out|kill rate|error rate|positive pass|good pass",
+    metric_name,
+    ignore.case = TRUE
+  )
+
+  if (is_percentage) {
+    percentage <- if (abs(value) <= 1) {
+      value * 100
+    } else {
+      value
+    }
+
+    return(paste0(round(percentage, 1), "%"))
+  }
+
+  if (abs(value - round(value)) < 1e-8) {
+    return(as.character(round(value)))
   }
 
   as.character(round(value, 2))
 }
 
 metric_value <- function(m, metric) {
-
   x <- m$key |>
     filter(.data$metric == metric)
 
@@ -490,7 +495,6 @@ metric_value <- function(m, metric) {
 }
 
 metric_card <- function(label, value, note = "") {
-
   div(
     class = "metric-card",
     div(class = "metric-label", label),
@@ -500,7 +504,6 @@ metric_card <- function(label, value, note = "") {
 }
 
 section_title <- function(title, intro) {
-
   div(
     class = "section-block-title",
     h2(title),
@@ -511,7 +514,6 @@ section_title <- function(title, intro) {
 # ---------------- USER INTERFACE ----------------
 
 ui <- page_fluid(
-
   theme = bs_theme(
     version = 5,
     bg = "#EEF2F5",
@@ -523,7 +525,6 @@ ui <- page_fluid(
   ),
 
   tags$head(
-
     tags$title(
       "Huskies Coaches Dashboard | Keyano ACAC 2026–27"
     ),
@@ -693,7 +694,6 @@ ui <- page_fluid(
     "Keyano Huskies · ACAC · 2026–27 | Internal performance analysis"
   )
 )
-
 # ---------------- SERVER ----------------
 
 server <- function(input, output, session) {
@@ -705,14 +705,11 @@ server <- function(input, output, session) {
   show_athletes <- reactiveVal(FALSE)
 
   matches <- reactive({
-
     invalidateLater(60000, session)
-
     load_matches()
   })
 
   period_matches <- reactive({
-
     ms <- matches()
 
     if (!length(ms)) {
@@ -745,7 +742,6 @@ server <- function(input, output, session) {
   })
 
   current_match <- reactive({
-
     ms <- period_matches()
 
     if (length(ms)) {
@@ -757,7 +753,6 @@ server <- function(input, output, session) {
 
   # Header latest-match details
   output$latest_match <- renderText({
-
     m <- current_match()
 
     if (is.null(m)) {
@@ -768,13 +763,11 @@ server <- function(input, output, session) {
   })
 
   output$match_details <- renderText({
-
     m <- current_match()
 
     if (is.null(m)) {
       "Sets · receptions · swings · rallies"
     } else {
-
       d <- if (is.na(m$date)) {
         "Date unknown"
       } else {
@@ -795,12 +788,10 @@ server <- function(input, output, session) {
 
   # Match-window buttons
   output$period_buttons <- renderUI({
-
     div(
       class = "period-buttons",
 
       lapply(match_windows, function(period) {
-
         actionButton(
           inputId = paste0(
             "period_",
@@ -824,9 +815,7 @@ server <- function(input, output, session) {
   })
 
   lapply(match_windows, function(period) {
-
     local({
-
       this_period <- period
 
       observeEvent(
@@ -836,7 +825,6 @@ server <- function(input, output, session) {
             gsub("[^A-Za-z0-9]", "", this_period)
           )
         ]],
-
         {
           selected_period(this_period)
           show_athletes(FALSE)
@@ -858,10 +846,8 @@ server <- function(input, output, session) {
 
     # Athletes view
     if (show_athletes()) {
-
       return(
         tagList(
-
           h2("Athletes"),
 
           p(
@@ -904,11 +890,8 @@ server <- function(input, output, session) {
       file_errors <- character()
 
       if (length(files)) {
-
         for (f in files) {
-
           err <- tryCatch({
-
             x <- read_match(f)
 
             if (!is.null(x$error)) {
@@ -916,7 +899,6 @@ server <- function(input, output, session) {
             } else {
               "Workbook parsed, but no match was returned."
             }
-
           }, error = function(e) {
             conditionMessage(e)
           })
@@ -930,7 +912,6 @@ server <- function(input, output, session) {
 
       return(
         tagList(
-
           div(
             class = "section-heading-row",
 
@@ -955,21 +936,15 @@ server <- function(input, output, session) {
             h3("Match data could not be loaded"),
 
             if (!dir.exists(match_dir)) {
-
               p(
                 "The data/matches folder is missing from the deployed app."
               )
-
             } else if (!length(files)) {
-
               p(
                 "No .xlsx files were found in data/matches/."
               )
-
             } else {
-
               tagList(
-
                 p(
                   "The workbook files were found. The exact parsing error is:"
                 ),
@@ -1192,7 +1167,6 @@ server <- function(input, output, session) {
         ),
 
         fluidRow(
-
           column(
             6,
 
@@ -1242,8 +1216,7 @@ server <- function(input, output, session) {
       )
     )
   })
-
-  # ---------------- ATHLETES TABLE ----------------
+    # ---------------- ATHLETES TABLE ----------------
 
   output$roster_table <- renderTable({
 
