@@ -790,15 +790,15 @@ ui <- page_fluid(
       .passing-player-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; align-items:stretch; }
       .passing-player-card { background:#fff; border:1px solid #d8e2ec; border-radius:13px; overflow:hidden; box-shadow:0 3px 10px rgba(18,45,75,.06); min-width:0; }
       .passing-player-header { background:#123f68 !important; color:#fff !important; padding:11px 14px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:800; }
-      .passing-player-name { font-size:15px; line-height:1.2; }
+      .passing-player-name { font-size:16px; line-height:1.2; }
       .passing-player-meta { font-size:11px; font-weight:500; opacity:.9; white-space:nowrap; }
-      .passing-player-caption { padding:9px 12px 0; color:#718397; font-size:10px; }
+      .passing-player-caption { padding:9px 12px 0; color:#718397; font-size:11px; }
       .passing-court-stage { display:grid; grid-template-columns:minmax(0,1fr) 190px minmax(0,1fr); grid-template-rows:54px 205px 54px; gap:5px 2px; padding:8px 9px 15px; min-height:350px; align-items:center; }
       .passing-point { text-align:center; min-width:0; z-index:2; color:#5d7081; }
-      .passing-point-title { font-size:10px; letter-spacing:.35px; text-transform:uppercase; font-weight:800; margin-bottom:3px; }
-      .passing-point-count { font-size:25px; font-weight:900; line-height:1; color:#263746; }
-      .passing-point-sub { font-size:9px; line-height:1.3; margin-top:3px; white-space:normal; }
-      .passing-point-empty { color:#a6b1bb; font-style:italic; font-size:10px; }
+      .passing-point-title { font-size:11px; letter-spacing:.35px; text-transform:uppercase; font-weight:800; margin-bottom:3px; }
+      .passing-point-count { font-size:26px; font-weight:900; line-height:1; color:#263746; }
+      .passing-point-sub { font-size:10px; line-height:1.3; margin-top:3px; white-space:normal; }
+      .passing-point-empty { color:#a6b1bb; font-style:italic; font-size:11px; }
       .passing-overhand { grid-column:1 / 4; grid-row:1; }
       .passing-left { grid-column:1; grid-row:2; }
       .passing-right { grid-column:3; grid-row:2; }
@@ -806,8 +806,8 @@ ui <- page_fluid(
       .passing-player-figure { grid-column:2; grid-row:2; height:205px; width:190px; display:flex; justify-content:center; align-items:center; position:relative; z-index:1; overflow:visible; }
       .passing-player-figure img { display:block; width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; object-position:center; }
       .passing-body-point { position:absolute; top:49%; left:50%; transform:translate(-50%,-50%); width:100%; min-height:54px; padding:5px 4px; border:0; border-radius:0; background:rgba(255,255,255,.18); text-align:center; box-shadow:none; }
-      .passing-body-point { color:#123f68; font-weight:800; text-shadow:0 1px 2px rgba(255,255,255,.95); background:rgba(255,255,255,.78); border-radius:5px; }\n      .passing-body-point .passing-point-title { font-size:11px; font-weight:900; margin:0; color:#123f68; }
-      .passing-body-point .passing-point-count { font-size:24px; font-weight:900; color:#123f68; }\n      .passing-body-point .passing-point-sub { font-weight:800; color:#123f68; }
+      .passing-body-point { color:#123f68; font-weight:800; text-shadow:0 1px 2px rgba(255,255,255,.95); background:rgba(255,255,255,.78); border-radius:5px; }\n      .passing-body-point .passing-point-title { font-size:12px; font-weight:900; margin:0; color:#123f68; }
+      .passing-body-point .passing-point-count { font-size:25px; font-weight:900; color:#123f68; }\n      .passing-body-point .passing-point-sub { font-weight:800; color:#123f68; }
       .passing-player-footer { border-top:1px solid #e7edf2; padding:8px 12px; display:flex; justify-content:space-between; color:#607488; font-size:10px; gap:8px; }
       .passing-player-footer strong { color:#263746; }
       @media(max-width:1050px) { .passing-player-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
@@ -2240,11 +2240,11 @@ server <- function(input, output, session) {
       ap <- z$`Aced %`[1]
       div(class = paste("passing-point", class_name),
         div(class = "passing-point-title", point_name),
-        div(class = "passing-point-count", format(round(total), nsmall = 0, trim = TRUE)),
+        div(class = "passing-point-count", if (is.finite(gp)) sprintf("%.0f%%", gp * 100) else "—"),
         div(class = "passing-point-sub",
-          paste0(ifelse(is.finite(gp), paste0(round(gp * 100), "% good"), ""),
-                 ifelse(is.finite(gp) && is.finite(ap), " · ", ""),
-                 aced, " aced", ifelse(is.finite(ap), paste0(" · ", round(ap * 100), "%"), ""))))
+          tags$strong(paste0(format(round(total), nsmall = 0, trim = TRUE), " attempts"))),
+        div(class = "passing-point-sub",
+          paste0(aced, " aced", ifelse(is.finite(ap), paste0(" · ", round(ap * 100), "%"), ""))))
     }
 
     cards <- lapply(seq_len(nrow(players)), function(i) {
