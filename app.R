@@ -1884,7 +1884,7 @@ server <- function(input, output, session) {
       "Attack" = c("Kill", "A Err", "Att", "H %")
     )
     ordered_cols <- c("Rotation", unlist(groups, use.names = FALSE))
-    cols <- ordered_cols[ordered_cols %in% names(d)]
+    cols <- ordered_cols[ordered_cols %in% names(all_rotation)]
     validate(need("Rotation" %in% cols, "Rotation column is missing."))
 
     all_rotation <- all_rotation[, cols, drop = FALSE]
