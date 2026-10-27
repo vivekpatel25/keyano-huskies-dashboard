@@ -593,8 +593,33 @@ ui <- page_fluid(
         color: #2F75B5 !important;
       }
 
+      /* Use the full available browser width while preserving the existing layout. */
+      html, body {
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+      }
+
+      .container-fluid {
+        width: 100% !important;
+        max-width: none !important;
+        padding-left: 20px !important;
+        padding-right: 20px !important;
+      }
+
       .content-card {
         min-height: 320px;
+        width: 100%;
+        max-width: none !important;
+        box-sizing: border-box;
+      }
+
+      .analytics-section,
+      .key-metrics-panel,
+      .chart-card {
+        width: 100%;
+        max-width: none !important;
+        box-sizing: border-box;
       }
 
       .analytics-section {
@@ -645,15 +670,6 @@ ui <- page_fluid(
 
       .table-wrap {
         overflow-x: auto;
-        width: 100%;
-      }
-      .table-wrap table {
-        width: 100% !important;
-        table-layout: fixed;
-      }
-      .table-wrap table th,
-      .table-wrap table td {
-        white-space: normal;
       }
 
       .key-metrics-panel { background:#fff; border:1px solid #dce5ed; border-radius:14px; padding:22px; }
@@ -1124,6 +1140,18 @@ server <- function(input, output, session) {
         uiOutput("skill_cards_ui")
       ),
 
+      tags$style(HTML("
+        .attack-table-card { padding: 14px 16px 18px; }
+        .attack-table-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:1px solid #d7e1ea; margin-bottom:4px; }
+        .attack-table-heading h3 { margin:0 0 8px 0; font-size:16px; font-weight:800; color:#17324d; }
+        .attack-phase-filter { min-width:190px; }
+        .attack-phase-filter .form-group { margin-bottom:6px; }
+        .attack-phase-filter .control-label { display:none; }
+        .attack-table-card table { width:100%; margin-bottom:0; border-collapse:collapse; }
+        .attack-table-card thead th { color:#60788d; font-size:10px; text-transform:uppercase; font-weight:800; border:0; border-bottom:1px solid #d7e1ea; padding:8px 9px; }
+        .attack-table-card tbody td { border:0; border-bottom:1px solid #d7e1ea; padding:10px 9px; color:#526b82; font-size:13px; }
+        .attack-table-card tbody td:first-child { color:#17324d; font-weight:700; }
+      ")), 
       # 3. Attack Detail
       div(
         class = "analytics-section",
@@ -1134,16 +1162,17 @@ server <- function(input, output, session) {
         ),
 
         div(
-          class = "chart-card table-wrap",
+          class = "chart-card table-wrap attack-table-card",
           div(
-            style = "display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:14px; flex-wrap:wrap;",
-            h3("ATTACK TYPE SUMMARY", style = "margin:0;"),
-            selectInput(
-              "attack_phase_table",
-              label = NULL,
-              choices = c("All" = "All", "First Ball" = "FB", "Transition" = "Transition"),
-              selected = "All",
-              width = "220px"
+            class = "attack-table-heading",
+            h3("ATTACK TYPE SUMMARY"),
+            div(
+              class = "attack-phase-filter",
+              selectInput(
+                "attack_phase_filter", NULL,
+                choices = c("All" = "All", "First Ball (FB)" = "FB", "Transition" = "Transition"),
+                selected = "All", width = "190px"
+              )
             )
           ),
           tableOutput("attack_table")
@@ -1658,55 +1687,46 @@ server <- function(input, output, session) {
   })
 
   output$attack_table <- renderTable({
-    phase <- input$attack_phase_table
-    if (is.null(phase) || !phase %in% c("All", "FB", "Transition")) phase <- "All"
+    d <- attack_summary()
+    validate(need(nrow(d) > 0, "No attack detail found in the selected matches."))
 
-    if (phase == "All") {
-      d <- attack_summary()
-      validate(need(nrow(d) > 0, "No attack detail found in the selected matches."))
-      d <- d[, c("Attack Type", "Attempts", "Kills", "Errors",
-                 "FB Eff.", "Transition Eff.", "Total Eff."), drop = FALSE]
-      for (nm in c("Attempts", "Kills", "Errors")) {
-        d[[nm]] <- ifelse(is.finite(d[[nm]]), as.character(as.integer(round(d[[nm]]))), "—")
-      }
-      for (nm in c("FB Eff.", "Transition Eff.", "Total Eff.")) {
-        d[[nm]] <- ifelse(is.finite(d[[nm]]), sprintf("%.3f", d[[nm]]), "—")
-      }
-    } else {
+    phase <- input$attack_phase_filter
+    if (is.null(phase) || !nzchar(phase)) phase <- "All"
+    if (phase %in% c("FB", "Transition")) {
       raw <- attack_period_data()
-      validate(need(nrow(raw) > 0, "No attack detail found in the selected matches."))
-      phase_key <- if (phase == "FB") {
-        tolower(trimws(raw[["Previous Play"]])) %in% c("fb", "first ball", "first-ball", "firstball")
-      } else {
-        tolower(trimws(raw[["Previous Play"]])) %in% c("transition", "trans", "transition attack")
-      }
-      raw <- raw[phase_key, , drop = FALSE]
-      validate(need(nrow(raw) > 0, paste("No", ifelse(phase == "FB", "first-ball", "transition"), "attack rows found.")))
-      types <- unique(raw[["Attack Type"]])
-      rows <- lapply(types, function(tp) {
+      rows <- lapply(as.character(d[["Attack Type"]]), function(tp) {
         z <- raw[raw[["Attack Type"]] == tp, , drop = FALSE]
-        a <- sum(z[["Attempts"]], na.rm = TRUE)
-        k <- sum(z[["Kills"]], na.rm = TRUE)
-        e <- sum(z[["Error"]], na.rm = TRUE)
+        if (phase == "FB") {
+          z <- z[tolower(z[["Previous Play"]]) %in% c("fb", "first ball", "first-ball", "firstball"), , drop = FALSE]
+        } else {
+          z <- z[tolower(z[["Previous Play"]]) %in% c("transition", "trans", "transition attack"), , drop = FALSE]
+        }
+        a <- sum(z$Attempts, na.rm = TRUE)
+        k <- sum(z$Kills, na.rm = TRUE)
+        e <- sum(z$Error, na.rm = TRUE)
+        eff <- attack_eff(k, e, a)
         data.frame(
-          "Attack Type" = tp,
-          Attempts = as.integer(round(a)),
-          Kills = as.integer(round(k)),
-          Errors = as.integer(round(e)),
-          Efficiency = attack_eff(k, e, a),
+          `Attack Type` = tp,
+          Attempts = a,
+          Kills = k,
+          Errors = e,
+          `FB Eff.` = if (phase == "FB") eff else NA_real_,
+          `Transition Eff.` = if (phase == "Transition") eff else NA_real_,
+          `Total Eff.` = eff,
           check.names = FALSE
         )
       })
       d <- dplyr::bind_rows(rows)
-      names(d)[names(d) == "Efficiency"] <- if (phase == "FB") "FB Eff." else "Transition Eff."
-      d$Attempts <- as.character(d$Attempts)
-      d$Kills <- as.character(d$Kills)
-      d$Errors <- as.character(d$Errors)
-      eff_col <- if (phase == "FB") "FB Eff." else "Transition Eff."
-      d[[eff_col]] <- ifelse(is.finite(d[[eff_col]]), sprintf("%.3f", d[[eff_col]]), "—")
+    }
+
+    d$Attempts <- round(d$Attempts, 0)
+    d$Kills <- round(d$Kills, 0)
+    d$Errors <- round(d$Errors, 0)
+    for (nm in c("FB Eff.", "Transition Eff.", "Total Eff.")) {
+      d[[nm]] <- ifelse(is.finite(d[[nm]]), sprintf("%.3f", d[[nm]]), "—")
     }
     d
-  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s", align = "lrrrrrr")
+  }, striped = FALSE, bordered = FALSE, hover = FALSE, spacing = "xs", align = "lrrrrrr")
 
   output$attack_type_selector <- renderUI({
     d <- attack_summary()
