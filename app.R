@@ -1610,37 +1610,39 @@ server <- function(input, output, session) {
         match_label = ifelse(is.na(date), opponent, paste(format(date, "%b %d"), opponent, sep = " · "))
       )
 
-    # Team efficiency is calculated from each corresponding main match workbook.
-    # Match on basenames to avoid path/filename mismatches.
-    ms <- matches()
-    team_lookup <- lapply(ms, function(m) {
-      a <- m$attack
-      team_eff <- NA_real_
-      if (!is.null(a) && nrow(a) > 0) {
-        nm <- names(a)
-        low <- tolower(trimws(nm))
-        find_col <- function(patterns) {
-          hit <- which(Reduce(`|`, lapply(patterns, function(pat) grepl(pat, low))))
-          if (length(hit)) nm[hit[1]] else NA_character_
-        }
-        at <- find_col(c("attack attempts", "^attempts?$"))
-        ki <- find_col(c("^kills?$"))
-        er <- find_col(c("^error$"))
-        bl <- find_col(c("stuffed attacks", "blocks?"))
-        if (!anyNA(c(at, ki, er, bl))) {
-          vals <- lapply(c(at, ki, er, bl), function(col) suppressWarnings(as.numeric(a[[col]])))
-          attempts_sum <- sum(vals[[1]], na.rm = TRUE)
-          if (attempts_sum > 0) {
-            team_eff <- (sum(vals[[2]], na.rm = TRUE) - sum(vals[[3]], na.rm = TRUE) -
-                         sum(vals[[4]], na.rm = TRUE)) / attempts_sum
-          }
-        }
+    # Full-season team attack efficiency is calculated from ALL paired -Athlete.xlsx
+    # Attack sheets, pooling counts before calculating efficiency. This avoids relying
+    # on columns that are not present in the main match workbook's Attack Detail sheet.
+    all_athlete_matches <- athlete_match_data()
+    all_team_attack <- bind_rows(lapply(all_athlete_matches, function(x) {
+      a <- x$attack
+      if (is.null(a) || !nrow(a) ||
+          !all(c("Attack Attempts", "Kills", "Stuffed Attacks", "Error") %in% names(a))) {
+        return(tibble())
       }
-      tibble(match_key = basename(as.character(m$file)), team_eff = team_eff)
-    })
-    d <- left_join(d, bind_rows(team_lookup), by = "match_key") |> arrange(date)
+      a |>
+        transmute(
+          attempts = suppressWarnings(as.numeric(`Attack Attempts`)),
+          kills = suppressWarnings(as.numeric(Kills)),
+          stuffed = suppressWarnings(as.numeric(`Stuffed Attacks`)),
+          errors = suppressWarnings(as.numeric(Error))
+        )
+    }))
+
+    team_average <- NA_real_
+    if (nrow(all_team_attack)) {
+      team_attempts <- sum(all_team_attack$attempts, na.rm = TRUE)
+      if (is.finite(team_attempts) && team_attempts > 0) {
+        team_average <- (
+          sum(all_team_attack$kills, na.rm = TRUE) -
+          sum(all_team_attack$errors, na.rm = TRUE) -
+          sum(all_team_attack$stuffed, na.rm = TRUE)
+        ) / team_attempts
+      }
+    }
+
+    d <- d |> arrange(date)
     d$match_label <- factor(d$match_label, levels = unique(d$match_label))
-    team_average <- if (any(is.finite(d$team_eff))) mean(d$team_eff[is.finite(d$team_eff)]) else NA_real_
 
     p <- ggplot(d, aes(x = match_label, y = efficiency, group = 1)) +
       geom_line(color = "#17466B", linewidth = 1.1, na.rm = TRUE) +
