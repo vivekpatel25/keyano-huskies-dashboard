@@ -1281,13 +1281,19 @@ server <- function(input, output, session) {
           .setting-stats-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
           .setting-stats-heading h4 { margin:0 0 12px 0; }
           .setting-setter-label { margin:0 0 12px auto; color:#60788d; font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
-          .setting-stats-card table { width:100% !important; }
+          .setting-stats-card table { width:100% !important; table-layout:fixed; }
           .setting-stats-card .table-responsive { width:100%; }
-          .setting-stats-card th, .setting-stats-card td { white-space:nowrap; }
+          .setting-stats-card th, .setting-stats-card td { white-space:normal; text-align:center !important; vertical-align:middle; }
+          .setting-stats-card thead th { font-weight:800; }
+          .setting-stats-card tbody td { font-weight:700; font-variant-numeric:tabular-nums; }
+          .rotation-setting-card tbody tr:last-child td { background:#e7eef5 !important; color:#17324d !important; font-weight:900 !important; border-top:3px solid #17324d; }
+          .setting-stats-card tbody td:first-child { font-weight:900; }
+          .setting-stats-card .table-responsive table { margin:0; }
+          .rotation-setting-card tbody tr:last-child td { background:#e7eef5 !important; }
         ")),
 
         div(
-          class = "chart-card table-wrap setting-stats-card",
+          class = "chart-card table-wrap setting-stats-card rotation-setting-card",
           div(
             class = "setting-stats-heading",
             h4("Rotation setting totals"),
@@ -2009,28 +2015,88 @@ server <- function(input, output, session) {
 
   # ---------------- SETTING STATS ----------------
 
+  # Aggregate Setting Stats across the selected match window.
+  # Count fields are summed; percentage/efficiency fields are recalculated
+  # from the summed counts so Last 5, Last 10 and Full Season are meaningful.
+  aggregate_setting_totals <- function(selected_matches) {
+    pieces <- lapply(selected_matches, function(mm) {
+      d <- mm$rotation_setting
+      if (is.null(d) || !nrow(d)) return(NULL)
+      d <- as.data.frame(d, check.names = FALSE)
+      d <- d[grepl("^Ro[1-6]$", trimws(as.character(d$Rotation))), , drop = FALSE]
+      if (!nrow(d)) return(NULL)
+      d$Sets <- suppressWarnings(as.numeric(as.character(d$Sets)))
+      d$Kills <- suppressWarnings(as.numeric(as.character(d$Kills)))
+      d
+    })
+    pieces <- Filter(Negate(is.null), pieces)
+    if (!length(pieces)) return(data.frame(Rotation=character(), Sets=numeric(), Kills=numeric()))
+    combined <- bind_rows(pieces) |>
+      group_by(Rotation) |>
+      summarise(Sets=sum(Sets, na.rm=TRUE), Kills=sum(Kills, na.rm=TRUE), .groups="drop")
+    order_rot <- paste0("Ro", 1:6)
+    combined <- combined[match(order_rot[order_rot %in% combined$Rotation], combined$Rotation), , drop=FALSE]
+    bind_rows(combined, data.frame(Rotation="Total", Sets=sum(combined$Sets, na.rm=TRUE), Kills=sum(combined$Kills, na.rm=TRUE)))
+  }
+
+  aggregate_setter_block <- function(selected_matches, block_name) {
+    pieces <- lapply(selected_matches, function(mm) {
+      d <- mm[[block_name]]
+      if (is.null(d) || !nrow(d)) return(NULL)
+      as.data.frame(d, check.names=FALSE)
+    })
+    pieces <- Filter(Negate(is.null), pieces)
+    if (!length(pieces)) return(data.frame())
+
+    first_col <- names(pieces[[1]])[1]
+    count_cols <- intersect(c("Sets", "Kills", "Errors"), names(pieces[[1]]))
+    combined <- bind_rows(pieces) |>
+      mutate(.who = trimws(as.character(.data[[first_col]]))) |>
+      group_by(.who) |>
+      summarise(across(all_of(count_cols), ~sum(suppressWarnings(as.numeric(as.character(.x))), na.rm=TRUE)), .groups="drop")
+    names(combined)[names(combined)==".who"] <- first_col
+
+    total_sets <- if ("Sets" %in% names(combined)) sum(combined$Sets, na.rm=TRUE) else NA_real_
+    if ("Share of FB Sets" %in% names(pieces[[1]])) {
+      combined[["Share of FB Sets"]] <- ifelse(total_sets > 0, combined$Sets / total_sets, NA_real_)
+    }
+    if ("Share of Trans. Sets" %in% names(pieces[[1]])) {
+      combined[["Share of Trans. Sets"]] <- ifelse(total_sets > 0, combined$Sets / total_sets, NA_real_)
+    }
+    if (all(c("Kills", "Sets") %in% names(combined)) && "K%" %in% names(pieces[[1]])) {
+      combined[["K%"]] <- ifelse(combined$Sets > 0, combined$Kills / combined$Sets, NA_real_)
+    }
+    if (all(c("Errors", "Sets") %in% names(combined)) && "E%" %in% names(pieces[[1]])) {
+      combined[["E%"]] <- ifelse(combined$Sets > 0, combined$Errors / combined$Sets, NA_real_)
+    }
+    eff_col <- intersect(c("EFF.", "Eff.", "Eff", "Efficiency"), names(pieces[[1]]))
+    if (length(eff_col) && all(c("Kills", "Errors", "Sets") %in% names(combined))) {
+      combined[[eff_col[1]]] <- ifelse(combined$Sets > 0, (combined$Kills - combined$Errors) / combined$Sets, NA_real_)
+    }
+
+    # Keep the workbook's role order: Setter, Lib, Non-setter.
+    role_order <- c("Setter", "Lib", "Non-setter")
+    combined <- combined[order(match(combined[[first_col]], role_order), na.last=TRUE), , drop=FALSE]
+    combined
+  }
+
   output$rotation_setting_table <- renderTable({
-
-    m <- current_match()
-    req(m)
-
-    d <- m$rotation_setting
-    validate(need(!is.null(d) && nrow(d) > 0, "No rotation setting totals found."))
-    # Remove any legacy Attacks column if present.
-    d <- d[, intersect(c("Rotation", "Sets", "Kills"), names(d)), drop = FALSE]
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
+    d <- aggregate_setting_totals(selected_matches)
+    validate(need(nrow(d) > 0, "No rotation setting totals found."))
     d
-
-  }, striped = TRUE, bordered = FALSE, spacing = "s", digits = 0, width = "100%")
+  }, striped=TRUE, bordered=FALSE, spacing="s", digits=0, width="100%", rownames=FALSE)
 
   format_setting_table <- function(d) {
     if (is.null(d) || !nrow(d)) return(d)
-    d <- as.data.frame(d, check.names = FALSE)
+    d <- as.data.frame(d, check.names=FALSE)
     for (nm in names(d)) {
       values <- suppressWarnings(as.numeric(as.character(d[[nm]])))
       if (!all(is.na(values))) {
         nml <- tolower(trimws(nm))
         if (grepl("share", nml) || nml %in% c("k%", "e%") || grepl("percent|pct|%", nml)) {
-          d[[nm]] <- ifelse(is.na(values), "–", paste0(sprintf("%.1f", values * ifelse(max(abs(values), na.rm = TRUE) <= 1, 100, 1)), "%"))
+          d[[nm]] <- ifelse(is.na(values), "–", paste0(sprintf("%.1f", values * ifelse(max(abs(values), na.rm=TRUE) <= 1, 100, 1)), "%"))
         } else if (grepl("eff", nml)) {
           d[[nm]] <- ifelse(is.na(values), "–", sprintf("%.3f", values))
         } else if (grepl("sets|kills|errors", nml)) {
@@ -2042,20 +2108,16 @@ server <- function(input, output, session) {
   }
 
   output$fb_table <- renderTable({
-
-    m <- current_match()
-    req(m)
-    format_setting_table(m$fb_sets)
-
-  }, striped = TRUE, bordered = FALSE, spacing = "s", width = "100%")
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
+    format_setting_table(aggregate_setter_block(selected_matches, "fb_sets"))
+  }, striped=TRUE, bordered=FALSE, spacing="s", width="100%", rownames=FALSE)
 
   output$trans_table <- renderTable({
-
-    m <- current_match()
-    req(m)
-    format_setting_table(m$trans_sets)
-
-  }, striped = TRUE, bordered = FALSE, spacing = "s", width = "100%")
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
+    format_setting_table(aggregate_setter_block(selected_matches, "trans_sets"))
+  }, striped=TRUE, bordered=FALSE, spacing="s", width="100%", rownames=FALSE)
 
   # ---------------- PASSING BY CONTACT POINT ----------------
 
