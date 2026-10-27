@@ -644,6 +644,8 @@ ui <- page_fluid(
         text-align: center;
         white-space: nowrap;
         border-bottom: 1px solid #d9e2eb;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
       }
       .rotation-heatmap thead tr:first-child th {
         background: #fff;
@@ -665,10 +667,17 @@ ui <- page_fluid(
         font-weight: 800;
         background: #f7f9fb;
       }
+      /* Strong vertical separators between Game Phase, Serve, Reception and Attack. */
+      .rotation-heatmap .phase-end {
+        border-right: 3px solid #c4d0dc !important;
+      }
       .rotation-heatmap tbody tr.average-row td {
         font-weight: 800;
         border-top: 3px solid #17324d;
         border-bottom: 0;
+      }
+      .rotation-heatmap tbody tr.average-row td:not(:first-child) {
+        background-color: #f4f6f8 !important;
       }
 
       .analytics-section {
@@ -1910,14 +1919,22 @@ server <- function(input, output, session) {
       d[[nm]] <- suppressWarnings(as.numeric(d[[nm]]))
     }
 
-    # Add an average row beneath Ro1-Ro6.
+    # AVG row: average the three rate metrics requested; sum all other metrics.
     metric_cols <- setdiff(names(d), "Rotation")
+    average_metrics <- c("SO%", "PS%", "Serve In %")
     avg <- as.list(rep(NA_real_, length(names(d))))
     names(avg) <- names(d)
     avg$Rotation <- "AVG"
     for (nm in metric_cols) {
       x <- d[[nm]]
-      avg[[nm]] <- if (any(is.finite(x))) mean(x[is.finite(x)]) else NA_real_
+      x <- x[is.finite(x)]
+      if (!length(x)) {
+        avg[[nm]] <- NA_real_
+      } else if (nm %in% average_metrics) {
+        avg[[nm]] <- mean(x)
+      } else {
+        avg[[nm]] <- sum(x)
+      }
     }
     display_data <- bind_rows(d, as.data.frame(avg, check.names = FALSE))
 
@@ -1938,32 +1955,48 @@ server <- function(input, output, session) {
       if (!is.finite(value)) return("—")
       if (metric %in% c("SO%", "PS%", "Serve In %")) return(sprintf("%.1f%%", value * 100))
       if (metric == "H %") return(sprintf("%.3f", value))
-      if (metric %in% c("Ace", "Serve Err", "Serve Att", "SR Good", "SR Poor", "SR Err", "SR Att", "Kill", "A Err", "Att")) {
+      if (metric %in% c("SR Perf", "Ace", "Serve Err", "Serve Att", "SR Good", "SR Poor", "SR Err", "SR Att", "Kill", "A Err", "Att")) {
         return(as.character(round(value)))
       }
       sprintf("%.1f", value)
+    }
+
+    # Find the final column in each phase group for thick separators.
+    phase_end_cols <- character()
+    for (group_name in names(groups)) {
+      present <- intersect(groups[[group_name]], cols)
+      if (length(present)) phase_end_cols <- c(phase_end_cols, tail(present, 1))
     }
 
     group_header <- list(tags$th(rowspan = 2, "Rotation"))
     for (group_name in names(groups)) {
       present <- intersect(groups[[group_name]], cols)
       if (length(present)) {
-        group_header[[length(group_header) + 1]] <- tags$th(colspan = length(present), group_name)
+        group_header[[length(group_header) + 1]] <- tags$th(
+          colspan = length(present),
+          class = if (tail(present, 1) %in% phase_end_cols) "phase-end" else NULL,
+          group_name
+        )
       }
     }
-    sub_header <- lapply(cols[-1], function(nm) tags$th(nm))
+    sub_header <- lapply(cols[-1], function(nm) {
+      tags$th(class = if (nm %in% phase_end_cols) "phase-end" else NULL, nm)
+    })
 
     body_rows <- lapply(seq_len(nrow(display_data)), function(i) {
       is_avg <- identical(as.character(display_data$Rotation[i]), "AVG")
       row_cells <- lapply(cols, function(nm) {
+        extra_class <- if (nm %in% phase_end_cols) "phase-end" else NULL
         if (nm == "Rotation") {
-          tags$td(style = "text-align:left;font-weight:800;",
+          tags$td(class = extra_class, style = "text-align:left;font-weight:800;",
                   as.character(display_data$Rotation[i]))
         } else {
           value <- display_data[[nm]][i]
-          bg <- cell_colour(value, d[[nm]], nm)
+          # The AVG row is neutral; colour only the six rotation rows.
+          bg <- if (is_avg) "#f4f6f8" else cell_colour(value, d[[nm]], nm)
           tags$td(
-            style = paste0("background-color:", bg, ";font-variant-numeric:tabular-nums;"),
+            class = extra_class,
+            style = paste0("background-color:", bg, ";font-weight:800;font-variant-numeric:tabular-nums;"),
             format_cell(value, nm)
           )
         }
