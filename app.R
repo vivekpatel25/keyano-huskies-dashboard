@@ -2062,12 +2062,31 @@ server <- function(input, output, session) {
       summarise(across(all_of(count_cols), ~sum(suppressWarnings(as.numeric(as.character(.x))), na.rm=TRUE)), .groups="drop")
     names(combined)[names(combined)==".who"] <- first_col
 
-    total_sets <- if ("Sets" %in% names(combined)) sum(combined$Sets, na.rm=TRUE) else NA_real_
-    if ("Share of FB Sets" %in% names(pieces[[1]])) {
-      combined[["Share of FB Sets"]] <- ifelse(total_sets > 0, combined$Sets / total_sets, NA_real_)
-    }
-    if ("Share of Trans. Sets" %in% names(pieces[[1]])) {
-      combined[["Share of Trans. Sets"]] <- ifelse(total_sets > 0, combined$Sets / total_sets, NA_real_)
+    # Preserve the share values recorded in each workbook. For multi-match
+    # periods, average the workbook's share column by role instead of
+    # recalculating it from combined set counts.
+    share_cols <- intersect(
+      c("Share of FB Sets", "Share of Trans. Sets"),
+      names(pieces[[1]])
+    )
+    if (length(share_cols)) {
+      share_data <- bind_rows(pieces) |>
+        mutate(.who = trimws(as.character(.data[[first_col]]))) |>
+        group_by(.who) |>
+        summarise(
+          across(
+            all_of(share_cols),
+            ~{
+              v <- suppressWarnings(as.numeric(as.character(.x)))
+              if (any(is.finite(v))) mean(v[is.finite(v)]) else NA_real_
+            }
+          ),
+          .groups = "drop"
+        )
+      names(share_data)[names(share_data) == ".who"] <- first_col
+      combined <- combined |>
+        select(-any_of(share_cols)) |>
+        left_join(share_data, by = first_col)
     }
     if (all(c("Kills", "Sets") %in% names(combined)) && "K%" %in% names(pieces[[1]])) {
       combined[["K%"]] <- ifelse(combined$Sets > 0, combined$Kills / combined$Sets, NA_real_)
