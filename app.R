@@ -786,6 +786,32 @@ ui <- page_fluid(
       .skill-legend-pct { text-align:right; font-weight:800; color:#263d50; white-space:nowrap; }
       .skill-legend-count { text-align:right; font-size:11px; color:#6d8192; }
       .skill-card-footer { border-top:1px dashed #dce5ed; margin:0 16px; padding:10px 0 12px; text-align:center; color:#6b8295; font-size:11px; }
+      .passing-section-note { color:#718397; font-size:12px; margin:0 0 12px; }
+      .passing-player-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; align-items:stretch; }
+      .passing-player-card { background:#fff; border:1px solid #d8e2ec; border-radius:13px; overflow:hidden; box-shadow:0 3px 10px rgba(18,45,75,.06); min-width:0; }
+      .passing-player-header { background:#bd5700; color:#fff; padding:11px 14px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:800; }
+      .passing-player-name { font-size:15px; line-height:1.2; }
+      .passing-player-meta { font-size:11px; font-weight:500; opacity:.9; white-space:nowrap; }
+      .passing-player-caption { padding:9px 12px 0; color:#718397; font-size:10px; }
+      .passing-court-stage { display:grid; grid-template-columns:minmax(0,1fr) 112px minmax(0,1fr); grid-template-rows:54px 150px 54px; gap:5px 2px; padding:8px 9px 15px; min-height:295px; align-items:center; }
+      .passing-point { text-align:center; min-width:0; z-index:2; color:#5d7081; }
+      .passing-point-title { font-size:10px; letter-spacing:.35px; text-transform:uppercase; font-weight:800; margin-bottom:3px; }
+      .passing-point-count { font-size:25px; font-weight:900; line-height:1; color:#263746; }
+      .passing-point-sub { font-size:9px; line-height:1.3; margin-top:3px; white-space:normal; }
+      .passing-point-empty { color:#a6b1bb; font-style:italic; font-size:10px; }
+      .passing-overhand { grid-column:1 / 4; grid-row:1; }
+      .passing-left { grid-column:1; grid-row:2; }
+      .passing-right { grid-column:3; grid-row:2; }
+      .passing-low { grid-column:1 / 4; grid-row:3; }
+      .passing-player-figure { grid-column:2; grid-row:2; height:150px; width:112px; display:flex; justify-content:center; align-items:center; position:relative; z-index:1; }
+      .passing-player-figure img { max-width:100%; max-height:100%; object-fit:contain; }
+      .passing-body-point { position:absolute; top:47%; left:50%; transform:translate(-50%,-50%); width:112px; min-height:54px; padding:5px 4px; border:1px solid #d7e1eb; border-radius:4px; background:rgba(255,255,255,.94); text-align:center; box-shadow:0 1px 4px rgba(15,35,55,.05); }
+      .passing-body-point .passing-point-title { font-size:9px; margin:0; }
+      .passing-body-point .passing-point-count { font-size:21px; }
+      .passing-player-footer { border-top:1px solid #e7edf2; padding:8px 12px; display:flex; justify-content:space-between; color:#607488; font-size:10px; gap:8px; }
+      .passing-player-footer strong { color:#263746; }
+      @media(max-width:1050px) { .passing-player-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+      @media(max-width:650px) { .passing-player-grid { grid-template-columns:1fr; } .passing-court-stage { grid-template-columns:minmax(0,1fr) 100px minmax(0,1fr); } .passing-player-figure { width:100px; } .passing-body-point { width:100px; } }
       @media(max-width:1000px) { .skill-cards-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
       @media(max-width:650px) { .skill-cards-grid { grid-template-columns:1fr; } .skill-card-body { grid-template-columns:120px minmax(0,1fr); } }
       @media(max-width:850px) { .metric-row { grid-template-columns:minmax(140px, 1fr) 65px; gap:10px; } .metric-bar-area { grid-column:1 / -1; } }
@@ -1337,17 +1363,11 @@ server <- function(input, output, session) {
           "Reception outcomes by player and contact point."
         ),
 
-        uiOutput("passing_player_ui"),
-
-        div(
-          class = "chart-card",
-          plotOutput("passing_plot", height = 300)
+        p(
+          class = "passing-section-note",
+          "Each player is shown separately. The contact-point labels are arranged around the player; the figures reflect the selected match period."
         ),
-
-        div(
-          class = "chart-card table-wrap",
-          tableOutput("passing_table")
-        )
+        uiOutput("passing_cards_ui")
       )
     )
   })
@@ -2146,120 +2166,121 @@ server <- function(input, output, session) {
 
   # ---------------- PASSING BY CONTACT POINT ----------------
 
-  output$passing_player_ui <- renderUI({
+  # Use the player silhouette already stored with the app's static assets.
+  # If your repository uses a different filename, update this single value.
+  passing_player_image <- "Volleyball Player in Defensive Stance.png"
 
-    m <- current_match()
+  passing_period_data <- reactive({
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
 
-    if (
-      is.null(m) ||
-      !all(
-        c("Player No.", "Player Name") %in% names(m$passing)
-      )
-    ) {
-      return(NULL)
-    }
-
-    players <- unique(
-      paste0(
-        m$passing$`Player No.`,
-        " · ",
-        m$passing$`Player Name`
-      )
-    )
-
-    selectInput(
-      "pass_player",
-      "Player",
-      choices = players,
-      selected = if (length(players)) players[1] else NULL
-    )
-  })
-
-  passing_data <- reactive({
-
-    m <- current_match()
-
-    req(m, input$pass_player)
-
-    d <- m$passing
-
-    validate(
-      need(
-        all(
-          c("Player No.", "Player Name") %in% names(d)
-        ),
-        "Player columns missing."
-      )
-    )
-
-    d |>
-      filter(
-        paste0(
-          `Player No.`,
-          " · ",
-          `Player Name`
-        ) == input$pass_player
-      )
-  })
-
-  output$passing_plot <- renderPlot({
-
-    d <- passing_data()
-
-    validate(
-      need(
-        all(
-          c("Contact Point", "Total Pass") %in% names(d)
-        ),
-        "Passing columns missing."
-      )
-    )
+    rows <- lapply(selected_matches, function(match_data) {
+      d <- match_data$passing
+      if (is.null(d) || !nrow(d)) return(NULL)
+      required <- c("Player No.", "Player Name", "Contact Point", "Total Pass", "Good Pass", "Aced")
+      if (!all(required %in% names(d))) return(NULL)
+      d
+    })
+    d <- dplyr::bind_rows(rows)
+    validate(need(nrow(d) > 0, "No Passing by Contact Point data found for this period."))
+    if (!"Position" %in% names(d)) d$Position <- ""
 
     d <- d |>
       mutate(
-        `Total Pass` = suppressWarnings(
-          as.numeric(`Total Pass`)
-        )
+        `Player No.` = as.character(`Player No.`),
+        `Player Name` = trimws(as.character(`Player Name`)),
+        Position = as.character(Position),
+        `Contact Point` = trimws(as.character(`Contact Point`)),
+        `Total Pass` = suppressWarnings(as.numeric(`Total Pass`)),
+        `Good Pass` = suppressWarnings(as.numeric(`Good Pass`)),
+        Aced = suppressWarnings(as.numeric(Aced))
       ) |>
-      filter(!is.na(`Total Pass`))
-
-    validate(
-      need(
-        nrow(d) > 0,
-        "No passing data for this player."
+      mutate(
+        `Total Pass` = tidyr::replace_na(`Total Pass`, 0),
+        `Good Pass` = tidyr::replace_na(`Good Pass`, 0),
+        Aced = tidyr::replace_na(Aced, 0)
+      ) |>
+      group_by(`Player No.`, `Player Name`, Position, `Contact Point`) |>
+      summarise(
+        `Total Pass` = sum(`Total Pass`, na.rm = TRUE),
+        `Good Pass` = sum(`Good Pass`, na.rm = TRUE),
+        Aced = sum(Aced, na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      mutate(
+        `GP %` = ifelse(`Total Pass` > 0, `Good Pass` / `Total Pass`, NA_real_),
+        `Aced %` = ifelse(`Total Pass` > 0, Aced / `Total Pass`, NA_real_)
       )
-    )
-
-    ggplot(
-      d,
-      aes(
-        x = `Contact Point`,
-        y = `Total Pass`
-      )
-    ) +
-      geom_col(fill = "#2F75B5") +
-      geom_text(
-        aes(label = `Total Pass`),
-        vjust = -0.3
-      ) +
-      labs(
-        x = NULL,
-        y = "Total Pass"
-      ) +
-      theme_minimal(base_size = 12) +
-      theme(
-        axis.text.x = element_text(
-          angle = 20,
-          hjust = 1
-        )
-      )
+    d
   })
 
-  output$passing_table <- renderTable({
+  output$passing_cards_ui <- renderUI({
+    d <- passing_period_data()
+    validate(need(nrow(d) > 0, "No passing data to display."))
 
-    passing_data()
+    players <- d |>
+      distinct(`Player No.`, `Player Name`, Position) |>
+      arrange(suppressWarnings(as.numeric(`Player No.`)), `Player Name`)
 
-  }, striped = TRUE, bordered = FALSE, spacing = "s")
+    point_ui <- function(player_rows, point_name, class_name) {
+      z <- player_rows |> filter(`Contact Point` == point_name)
+      if (!nrow(z) || is.na(z$`Total Pass`[1]) || z$`Total Pass`[1] <= 0) {
+        return(div(class = paste("passing-point", class_name),
+          div(class = "passing-point-title", point_name),
+          div(class = "passing-point-empty", "none")))
+      }
+      total <- z$`Total Pass`[1]
+      good <- z$`Good Pass`[1]
+      aced <- z$Aced[1]
+      gp <- z$`GP %`[1]
+      ap <- z$`Aced %`[1]
+      div(class = paste("passing-point", class_name),
+        div(class = "passing-point-title", point_name),
+        div(class = "passing-point-count", format(round(total), nsmall = 0, trim = TRUE)),
+        div(class = "passing-point-sub",
+          paste0(ifelse(is.finite(gp), paste0(round(gp * 100), "% good"), ""),
+                 ifelse(is.finite(gp) && is.finite(ap), " · ", ""),
+                 aced, " aced", ifelse(is.finite(ap), paste0(" · ", round(ap * 100), "%"), ""))))
+    }
+
+    cards <- lapply(seq_len(nrow(players)), function(i) {
+      pl <- players[i, ]
+      rows <- d |>
+        filter(`Player No.` == pl$`Player No.`, `Player Name` == pl$`Player Name`)
+      get_count <- function(point) {
+        z <- rows |> filter(`Contact Point` == point)
+        if (!nrow(z)) 0 else z$`Total Pass`[1]
+      }
+      total_passes <- sum(rows$`Total Pass`, na.rm = TRUE)
+      total_good <- sum(rows$`Good Pass`, na.rm = TRUE)
+      total_aced <- sum(rows$Aced, na.rm = TRUE)
+      div(class = "passing-player-card",
+        div(class = "passing-player-header",
+          div(class = "passing-player-name", paste0("#", pl$`Player No.`, " ", pl$`Player Name`)),
+          div(class = "passing-player-meta", ifelse(is.na(pl$Position) || !nzchar(pl$Position), "", pl$Position))
+        ),
+        div(class = "passing-player-caption", "Contact-point outcomes · player facing you"),
+        div(class = "passing-court-stage",
+          point_ui(rows, "Overhand", "passing-overhand"),
+          point_ui(rows, "His Left", "passing-left"),
+          div(class = "passing-player-figure",
+            tags$img(src = passing_player_image, alt = "Volleyball player silhouette"),
+            point_ui(rows, "On body", "passing-body-point")
+          ),
+          point_ui(rows, "His Right", "passing-right"),
+          point_ui(rows, "Low", "passing-low")
+        ),
+        div(class = "passing-player-footer",
+          span(HTML(paste0("<strong>", format(round(total_passes), trim=TRUE), "</strong> passes"))),
+          span(HTML(paste0("<strong>", if (total_passes > 0) sprintf("%.1f%%", total_good / total_passes * 100) else "—", "</strong> good"))),
+          span(HTML(paste0("<strong>", format(round(total_aced), trim=TRUE), "</strong> aced")))
+        )
+      )
+    })
+
+    div(class = "passing-player-grid", cards)
+  })
+
 }
 
 shinyApp(ui, server)
