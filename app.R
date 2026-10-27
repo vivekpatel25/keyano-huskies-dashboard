@@ -89,6 +89,116 @@ match_windows <- c(
   "Full Season"
 )
 
+
+# ---------------- RED ZONE PARSER ----------------
+# The Match Information sheet contains a variable-length point sequence for each set.
+# Find set markers dynamically; never assume a fixed number of rows per set.
+parse_red_zone <- function(info) {
+  empty_points <- tibble(
+    point_order = integer(),
+    huskies_event = character(),
+    score = character(),
+    opponent_event = character(),
+    error_type = character()
+  )
+  empty <- list(description = "After Huskies reach 20", sets = list())
+  if (is.null(info) || !nrow(info) || ncol(info) < 3) return(empty)
+
+  cell <- function(r, c) {
+    if (r < 1 || r > nrow(info) || c < 1 || c > ncol(info)) return("")
+    x <- info[[c]][r]
+    if (!length(x) || is.na(x)) return("")
+    trimws(as.character(x))
+  }
+
+  # The workbook stores the section label in A10 and its description in A11.
+  red_rows <- which(vapply(seq_len(nrow(info)), function(r) {
+    grepl("^red\\s*zone$", cell(r, 1), ignore.case = TRUE)
+  }, logical(1)))
+  if (!length(red_rows)) return(empty)
+
+  red_row <- red_rows[1]
+  description <- cell(red_row + 1, 1)
+  if (!nzchar(description)) description <- "After Huskies reach 20"
+
+  # Only recognize set markers below the Red Zone heading. This avoids
+  # accidentally picking up any set labels elsewhere in Match Information.
+  set_rows <- which(vapply(seq_len(nrow(info)), function(r) {
+    r > red_row && grepl("^set\\s*\\d+", cell(r, 1), ignore.case = TRUE)
+  }, logical(1)))
+  if (!length(set_rows)) return(list(description = description, sets = list()))
+
+  set_list <- vector("list", length(set_rows))
+  for (j in seq_along(set_rows)) {
+    start_row <- set_rows[j]
+    end_row <- if (j < length(set_rows)) set_rows[j + 1] - 1L else nrow(info)
+    set_label <- cell(start_row, 1)
+    set_number <- suppressWarnings(as.integer(sub(
+      "(?i)^set\\s*(\\d+).*", "\\1", set_label, perl = TRUE
+    )))
+    opening_score <- cell(start_row, 2)
+
+    first_data <- start_row + 1L
+    # Skip the team-label row (Huskies / BC), wherever it occurs.
+    if (first_data <= end_row &&
+        (grepl("^huskies$", cell(first_data, 2), ignore.case = TRUE) ||
+         grepl("^bc$", cell(first_data, 3), ignore.case = TRUE))) {
+      first_data <- first_data + 1L
+    }
+
+    point_rows <- list()
+    if (first_data <= end_row) {
+      for (r in seq.int(first_data, end_row)) {
+        huskies_cell <- cell(r, 2)
+        opponent_cell <- cell(r, 3)
+        if (!nzchar(huskies_cell) && !nzchar(opponent_cell)) next
+        if (grepl("^huskies$", huskies_cell, ignore.case = TRUE) ||
+            grepl("^bc$", opponent_cell, ignore.case = TRUE)) next
+
+        huskies_is_score <- grepl("^\\d+\\s*[-–]\\s*\\d+$", huskies_cell)
+        opponent_is_score <- grepl("^\\d+\\s*[-–]\\s*\\d+$", opponent_cell)
+        score <- if (huskies_is_score) huskies_cell else if (opponent_is_score) opponent_cell else ""
+        huskies_event <- if (huskies_is_score) "" else huskies_cell
+        opponent_event <- if (opponent_is_score) "" else opponent_cell
+
+        if (!nzchar(score) && !nzchar(huskies_event) && !nzchar(opponent_event)) next
+
+        event_text <- tolower(trimws(huskies_event))
+        error_type <- if (grepl("serve\\s*error", event_text)) {
+          "Serve Error"
+        } else if (grepl("attack\\s*error", event_text)) {
+          "Attack Error"
+        } else if (grepl("negative\\s*block\\s*\\(\\s*kill\\s*\\)|block\\s*error", event_text)) {
+          "Block Error"
+        } else {
+          ""
+        }
+
+        point_rows[[length(point_rows) + 1L]] <- tibble(
+          point_order = length(point_rows) + 1L,
+          huskies_event = huskies_event,
+          score = score,
+          opponent_event = opponent_event,
+          error_type = error_type
+        )
+      }
+    }
+
+    point_df <- if (length(point_rows)) bind_rows(point_rows) else empty_points
+    set_list[[j]] <- list(
+      set_number = if (is.na(set_number)) j else set_number,
+      set_label = set_label,
+      opening_score = opening_score,
+      points = point_df,
+      serve_errors = as.numeric(sum(point_df$error_type == "Serve Error", na.rm = TRUE)),
+      attack_errors = as.numeric(sum(point_df$error_type == "Attack Error", na.rm = TRUE)),
+      block_errors = as.numeric(sum(point_df$error_type == "Block Error", na.rm = TRUE))
+    )
+  }
+
+  list(description = description, sets = set_list)
+}
+
 # ---------------- WORKBOOK READER ----------------
 
 read_match <- function(path) {
@@ -124,6 +234,7 @@ read_match <- function(path) {
       sheet = "Match Information",
       col_names = FALSE
     )
+    red_zone <- parse_red_zone(info)
 
     get_info <- function(label) {
 
@@ -399,6 +510,8 @@ if (is.na(match_date)) {
       fb_sets = fb_sets,
       trans_sets = trans_sets,
       passing = passing,
+      red_zone = red_zone,
+      info = info,
       error = NULL
     )
 
@@ -581,6 +694,14 @@ ui <- page_fluid(
       type = "text/css",
       href = "styles.css"
     ),
+
+    tags$script(HTML("
+      $(document).on('shiny:connected', function() {
+        Shiny.addCustomMessageHandler('printReport', function(message) {
+          window.print();
+        });
+      });
+    ")),
 
     tags$style(HTML("
       :root {
@@ -856,6 +977,30 @@ ui <- page_fluid(
           padding-left: 0 !important;
         }
       }
+
+      .reports-link { display:flex; align-items:center; gap:6px; margin-left:12px; }
+      .reports-nav-button { border:0; background:transparent; color:#17324d; font-weight:800; }
+      .reports-nav-button:hover, .reports-nav-button:focus { color:#2F75B5 !important; }
+      .redzone-match-card { background:#fff; border:1px solid #d8e2ec; border-radius:12px; padding:16px; margin:14px 0; break-inside:avoid; }
+      .redzone-set-card { border:1px solid #e1e8ef; border-radius:9px; padding:12px; margin:10px 0; }
+      .redzone-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:12px 0 18px; }
+      .redzone-summary-card { background:#f1f5f9; border:1px solid #d8e2ec; border-radius:9px; padding:12px; }
+      .redzone-summary-card strong { display:block; font-size:23px; color:#17324d; }
+      .redzone-error-row td { background:#fff0ee !important; color:#8f2e25; font-weight:700; }
+      .redzone-table { width:100%; border-collapse:collapse; }
+      .redzone-table th, .redzone-table td { padding:7px 9px; border-bottom:1px solid #e5ebf0; text-align:left; }
+      .redzone-table th { color:#52677b; border-bottom:2px solid #17324d; }
+      .report-controls { display:flex; flex-wrap:wrap; gap:16px; align-items:end; margin:16px 0; }
+      .report-controls .form-group { min-width:230px; }
+      @media(max-width:700px) { .redzone-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+      @media print {
+        body * { visibility:hidden !important; }
+        #printable-report, #printable-report * { visibility:visible !important; }
+        #printable-report { position:absolute !important; left:0 !important; top:0 !important; width:100% !important; padding:0 !important; margin:0 !important; box-shadow:none !important; }
+        .no-print { display:none !important; }
+        .redzone-match-card, .redzone-set-card { break-inside:avoid; box-shadow:none !important; }
+        @page { margin:12mm; }
+      }
     "))
   ),
 
@@ -917,6 +1062,17 @@ ui <- page_fluid(
         class = "athletes-label"
       )
     )
+
+    ,
+    div(
+      class = "reports-link",
+      actionButton(
+        "reports_nav",
+        label = "REPORTS",
+        icon = icon("file-text"),
+        class = "reports-nav-button"
+      )
+    )
   ),
 
   # Match-window buttons
@@ -948,6 +1104,7 @@ server <- function(input, output, session) {
 
   show_athletes <- reactiveVal(FALSE)
   selected_athlete <- reactiveVal(NULL)
+  show_reports <- reactiveVal(FALSE)
 
   matches <- reactive({
 
@@ -1086,6 +1243,7 @@ server <- function(input, output, session) {
           selected_period(this_period)
           show_athletes(FALSE)
           selected_athlete(NULL)
+          show_reports(FALSE)
         }
       )
     })
@@ -1100,9 +1258,16 @@ server <- function(input, output, session) {
       } else {
         show_athletes(TRUE)
         selected_athlete(NULL)
+        show_reports(FALSE)
       }
     }
   )
+
+  observeEvent(input$reports_nav, {
+    show_reports(!show_reports())
+    show_athletes(FALSE)
+    selected_athlete(NULL)
+  })
 
   observeEvent(input$athlete_back, {
     selected_athlete(NULL)
@@ -1127,6 +1292,19 @@ server <- function(input, output, session) {
             textInput("athlete_search", "Search athletes", placeholder = "First name, jersey number, or position...", width = "100%"),
             uiOutput("roster_table_ui")
           )
+        )
+      )
+    }
+
+    if (show_reports()) {
+      return(
+        tagList(
+          div(class = "no-print",
+            h2("Match Reports"),
+            p(class = "section-intro", "Choose a match and generate a printable report. The full match report includes Red Zone point-by-point sequences only; it does not reproduce every point of every set."),
+            uiOutput("report_controls_ui")
+          ),
+          div(id = "printable-report", uiOutput("print_report_ui"))
         )
       )
     }
@@ -1405,7 +1583,172 @@ server <- function(input, output, session) {
           "Each player is shown separately. The contact-point labels are arranged around the player; the figures reflect the selected match period."
         ),
         uiOutput("passing_cards_ui")
+      ),
+
+      # 7. Red Zone
+      div(
+        class = "analytics-section",
+        section_title("RED ZONE", "Point-by-point pressure sequence after the Huskies reach 20."),
+        uiOutput("redzone_dashboard_ui")
       )
+    )
+  })
+
+  # ---------------- RED ZONE AND REPORTS ----------------
+
+  redzone_period_data <- reactive({
+    ms <- period_matches()
+    if (!length(ms)) return(list())
+    lapply(ms, function(m) {
+      rz <- m$red_zone
+      if (is.null(rz)) rz <- list(description = "After Huskies reach 20", sets = list())
+      list(date = m$date, opponent = m$opponent, file = m$file,
+           result = m$result, description = rz$description, sets = rz$sets)
+    })
+  })
+
+  output$redzone_dashboard_ui <- renderUI({
+    records <- redzone_period_data()
+    all_sets <- unlist(lapply(records, function(m) m$sets), recursive = FALSE)
+    serve_total <- sum(vapply(all_sets, function(z) z$serve_errors %||% 0, numeric(1)), na.rm=TRUE)
+    attack_total <- sum(vapply(all_sets, function(z) z$attack_errors %||% 0, numeric(1)), na.rm=TRUE)
+    block_total <- sum(vapply(all_sets, function(z) z$block_errors %||% 0, numeric(1)), na.rm=TRUE)
+    total <- serve_total + attack_total + block_total
+
+    summary_ui <- div(class="redzone-summary",
+      div(class="redzone-summary-card", "Serve errors", tags$strong(serve_total)),
+      div(class="redzone-summary-card", "Attack errors", tags$strong(attack_total)),
+      div(class="redzone-summary-card", "Block errors", tags$strong(block_total)),
+      div(class="redzone-summary-card", "Total errors", tags$strong(total))
+    )
+
+    match_ui <- lapply(records, function(m) {
+      date_text <- if (is.na(m$date)) "Date unknown" else format(m$date, "%b %d")
+      sets_ui <- lapply(m$sets, function(st) {
+        point_table <- if (nrow(st$points)) {
+          tags$table(class="redzone-table",
+            tags$thead(tags$tr(tags$th("#"), tags$th("Huskies"), tags$th("Score"), tags$th(m$opponent))),
+            tags$tbody(lapply(seq_len(nrow(st$points)), function(i) {
+              p <- st$points[i,]
+              cls <- if (nzchar(p$error_type)) "redzone-error-row" else ""
+              tags$tr(class=cls,
+                tags$td(p$point_order),
+                tags$td(if (nzchar(p$huskies_event)) p$huskies_event else ""),
+                tags$td(p$score),
+                tags$td(if (nzchar(p$opponent_event)) p$opponent_event else "")
+              )
+            }))
+          )
+        } else {
+          p(class="section-intro", "No point-by-point Red Zone entries were found for this set in the workbook.")
+        }
+        div(class="redzone-set-card",
+          h4(paste0("Set ", st$set_number, if (nzchar(st$opening_score)) paste0(" · ", st$opening_score) else "")),
+          point_table,
+          p(class="section-intro", paste0("Errors: Serve ", st$serve_errors, " · Attack ", st$attack_errors, " · Block ", st$block_errors))
+        )
+      })
+      div(class="redzone-match-card",
+        h3(paste0(date_text, " · ", m$opponent)),
+        if (!length(m$sets)) p(class="section-intro", "This workbook does not contain Red Zone set sequences yet.") else tagList(sets_ui)
+      )
+    })
+    tagList(summary_ui, if (length(match_ui)) tagList(match_ui) else p("No match data available for this period."))
+  })
+
+  `%||%` <- function(x, y) if (is.null(x) || !length(x) || is.na(x[1])) y else x
+
+  output$report_controls_ui <- renderUI({
+    ms <- matches()
+    if (!length(ms)) return(p("No match workbooks are available."))
+    labels <- vapply(ms, function(m) {
+      d <- if (is.na(m$date)) "Date unknown" else format(m$date, "%b %d")
+      paste(d, "·", m$opponent)
+    }, character(1))
+    choices <- stats::setNames(vapply(ms, function(m) m$file, character(1)), labels)
+    tagList(
+      div(class="report-controls",
+        selectInput("report_match_file", "Match", choices=choices, selected=unname(choices)[1], width="100%"),
+        selectInput("report_type", "Report type",
+          choices=c("Full Match Report (with Red Zone sequence)"="full", "Red Zone Report"="redzone"),
+          selected="full", width="100%"),
+        actionButton("print_report_btn", "Print / Save as PDF", icon=icon("print"), class="btn-primary")
+      )
+    )
+  })
+
+  observeEvent(input$print_report_btn, {
+    session$sendCustomMessage("printReport", list())
+  })
+
+  output$print_report_ui <- renderUI({
+    ms <- matches()
+    if (!length(ms)) return(h3("No match data available."))
+    target <- Filter(function(m) identical(m$file, input$report_match_file %||% ms[[1]]$file), ms)
+    if (!length(target)) target <- ms[1]
+    m <- target[[1]]
+    rz <- m$red_zone
+    if (is.null(rz)) rz <- list(description="After Huskies reach 20", sets=list())
+
+    set_blocks <- lapply(rz$sets, function(st) {
+      rows <- if (nrow(st$points)) {
+        tags$table(class="redzone-table",
+          tags$thead(tags$tr(tags$th("#"), tags$th("Huskies"), tags$th("Score"), tags$th(m$opponent))),
+          tags$tbody(lapply(seq_len(nrow(st$points)), function(i) {
+            p <- st$points[i,]
+            tags$tr(class=if (nzchar(p$error_type)) "redzone-error-row" else "",
+              tags$td(p$point_order), tags$td(p$huskies_event), tags$td(p$score), tags$td(p$opponent_event))
+          }))
+        )
+      } else p("No point-by-point entries found in this set.")
+      div(class="redzone-set-card",
+        h4(paste0("Set ", st$set_number, if (nzchar(st$opening_score)) paste0(" · ", st$opening_score) else "")),
+        rows,
+        p(paste0("Serve errors: ", st$serve_errors, " · Attack errors: ", st$attack_errors, " · Block errors: ", st$block_errors))
+      )
+    })
+    d <- if (is.na(m$date)) "Date unknown" else format(m$date, "%B %d, %Y")
+    is_redzone_only <- identical(input$report_type, "redzone")
+    match_summary <- if (is_redzone_only) NULL else tagList(
+      h2("Match Summary"),
+      tags$table(class="redzone-table",
+        tags$tbody(
+          tags$tr(tags$th("Opponent"), tags$td(m$opponent)),
+          tags$tr(tags$th("Result"), tags$td(ifelse(is.na(m$result), "Not recorded", m$result))),
+          tags$tr(tags$th("Date"), tags$td(d))
+        )
+      ),
+      if (nrow(m$key)) tagList(
+        h2("Key Metrics"),
+        tags$table(class="redzone-table",
+          tags$thead(tags$tr(tags$th("Category"), tags$th("Metric"), tags$th("Value"))),
+          tags$tbody(lapply(seq_len(nrow(m$key)), function(i) {
+            tags$tr(tags$td(m$key$category[i]), tags$td(m$key$metric[i]), tags$td(fmt_value(m$key$metric[i], m$key$value[i])))
+          }))
+        )
+      ),
+      if (nrow(m$attack)) tagList(
+        h2("Attack Summary by Type"),
+        tags$table(class="redzone-table",
+          tags$thead(tags$tr(tags$th("Attack Type"), tags$th("Attempts"), tags$th("Kills"), tags$th("Stuffed Attacks"), tags$th("Error"), tags$th("Eff."))),
+          tags$tbody(lapply(seq_len(nrow(m$attack)), function(i) {
+            a <- m$attack[i,]
+            tags$tr(tags$td(as.character(a$`Attack Type`[1])),
+              tags$td(if ("Attempts" %in% names(a)) a$Attempts[1] else ""),
+              tags$td(if ("Kills" %in% names(a)) a$Kills[1] else ""),
+              tags$td(if ("Stuffed Attacks" %in% names(a)) a$`Stuffed Attacks`[1] else ""),
+              tags$td(if ("Error" %in% names(a)) a$Error[1] else ""),
+              tags$td(if ("Eff." %in% names(a)) fmt_value("Eff.", a$`Eff.`[1]) else ""))
+          }))
+        )
+      )
+    )
+    tagList(
+      h1(if (is_redzone_only) "Red Zone Report" else "Match Report"),
+      h3(paste(d, "·", m$opponent)),
+      if (!is_redzone_only) match_summary,
+      h2("Red Zone · After Huskies reach 20"),
+      if (!length(rz$sets)) p(class="status-error", "This workbook does not contain Red Zone set sequences yet.") else tagList(set_blocks)
     )
   })
 
