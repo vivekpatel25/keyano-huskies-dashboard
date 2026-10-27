@@ -655,6 +655,11 @@ ui <- page_fluid(
       .table-wrap table td {
         white-space: normal;
       }
+      .attack-summary-card table { width:100% !important; table-layout:fixed; }
+      .attack-summary-card table th { color:#5b7184; font-size:11px; text-transform:uppercase; border-bottom:1px solid #d6e0e8; }
+      .attack-summary-card table td { border-top:1px solid #d6e0e8; padding:8px 10px; }
+      .attack-summary-card .form-group { margin:0; }
+      .attack-summary-card .control-label { display:none; }
 
       .key-metrics-panel { background:#fff; border:1px solid #dce5ed; border-radius:14px; padding:22px; }
       .metric-group { margin-top:22px; }
@@ -1134,7 +1139,16 @@ server <- function(input, output, session) {
         ),
 
         div(
-          class = "chart-card table-wrap",
+          class = "chart-card table-wrap attack-summary-card",
+          div(
+            style = "display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:10px;",
+            h3("ATTACK TYPE SUMMARY", style = "margin:0;"),
+            selectInput(
+              "attack_phase_filter", NULL,
+              choices = c("All" = "All", "First Ball (FB)" = "FB", "Transition" = "Transition"),
+              selected = "All", width = "190px"
+            )
+          ),
           tableOutput("attack_table")
         ),
 
@@ -1639,6 +1653,12 @@ server <- function(input, output, session) {
         `FB Eff.` = attack_eff(fb_k, fb_e, fb_a),
         `Transition Eff.` = attack_eff(tr_k, tr_e, tr_a),
         `Total Eff.` = attack_eff(all_k, all_e, all_a),
+        `FB Attempts` = fb_a,
+        `FB Kills` = fb_k,
+        `FB Errors` = fb_e,
+        `Transition Attempts` = tr_a,
+        `Transition Kills` = tr_k,
+        `Transition Errors` = tr_e,
         check.names = FALSE
       )
     })
@@ -1649,14 +1669,39 @@ server <- function(input, output, session) {
   output$attack_table <- renderTable({
     d <- attack_summary()
     validate(need(nrow(d) > 0, "No attack detail found in the selected matches."))
-    d$Attempts <- ifelse(is.finite(d$Attempts), as.character(as.integer(round(d$Attempts))), "—")
-    d$Kills <- ifelse(is.finite(d$Kills), as.character(as.integer(round(d$Kills))), "—")
-    d$Errors <- ifelse(is.finite(d$Errors), as.character(as.integer(round(d$Errors))), "—")
-    for (nm in c("FB Eff.", "Transition Eff.", "Total Eff.")) {
-      d[[nm]] <- ifelse(is.finite(d[[nm]]), sprintf("%.3f", d[[nm]]), "—")
+
+    phase <- input$attack_phase_filter %||% "All"
+    if (identical(phase, "FB")) {
+      shown <- data.frame(
+        `Attack Type` = d[["Attack Type"]],
+        Attempts = d[["FB Attempts"]],
+        Kills = d[["FB Kills"]],
+        Errors = d[["FB Errors"]],
+        `FB Eff.` = d[["FB Eff."]],
+        check.names = FALSE
+      )
+    } else if (identical(phase, "Transition")) {
+      shown <- data.frame(
+        `Attack Type` = d[["Attack Type"]],
+        Attempts = d[["Transition Attempts"]],
+        Kills = d[["Transition Kills"]],
+        Errors = d[["Transition Errors"]],
+        `Transition Eff.` = d[["Transition Eff."]],
+        check.names = FALSE
+      )
+    } else {
+      shown <- d[, c("Attack Type", "Attempts", "Kills", "Errors", "FB Eff.", "Transition Eff.", "Total Eff."), drop = FALSE]
     }
-    d
-  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s", align = "lrrrrrr")
+
+    for (nm in intersect(c("Attempts", "Kills", "Errors"), names(shown))) {
+      shown[[nm]] <- ifelse(is.finite(shown[[nm]]), as.character(as.integer(round(shown[[nm]]))), "—")
+    }
+    for (nm in intersect(c("FB Eff.", "Transition Eff.", "Total Eff."), names(shown))) {
+      shown[[nm]] <- ifelse(is.finite(shown[[nm]]), sprintf("%.3f", shown[[nm]]), "—")
+    }
+    shown
+  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s", width = "100%", align = "lrrrrrrr")
+
 
   output$attack_type_selector <- renderUI({
     d <- attack_summary()
