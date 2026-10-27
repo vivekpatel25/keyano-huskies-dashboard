@@ -663,6 +663,23 @@ ui <- page_fluid(
       .metric-marker-wrap { position:absolute; top:0; transform:translateX(-50%); height:30px; white-space:nowrap; }
       .metric-marker { height:22px; width:3px; background:#df4b3e; margin:auto; }
       .metric-marker-label { position:absolute; bottom:23px; left:50%; transform:translateX(-50%); font-size:10px; color:#d34b40; }
+      .skill-cards-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+      .skill-card { background:#fff; border:1px solid #dce5ed; border-radius:13px; overflow:hidden; box-shadow:0 3px 10px rgba(18,45,75,.06); }
+      .skill-card-header { background:#155A96; color:#fff; padding:12px 16px; font-weight:800; letter-spacing:.5px; display:flex; justify-content:space-between; align-items:center; }
+      .skill-card-body { display:grid; grid-template-columns:135px minmax(0,1fr); gap:12px; align-items:center; padding:16px; min-height:190px; }
+      .skill-donut { width:124px; height:124px; border-radius:50%; display:flex; align-items:center; justify-content:center; position:relative; margin:auto; }
+      .skill-donut-hole { background:#fff; width:76px; height:76px; border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; box-shadow:0 0 0 1px #edf1f4; }
+      .skill-donut-value { font-size:20px; line-height:1.05; font-weight:900; color:#18344c; }
+      .skill-donut-label { font-size:8px; letter-spacing:.7px; color:#60788b; font-weight:800; margin-top:4px; }
+      .skill-legend { display:flex; flex-direction:column; gap:9px; min-width:0; }
+      .skill-legend-row { display:grid; grid-template-columns:10px minmax(0,1fr) 44px 28px; gap:7px; align-items:center; font-size:12px; }
+      .skill-legend-swatch { width:10px; height:10px; border-radius:3px; }
+      .skill-legend-name { overflow-wrap:anywhere; color:#263d50; }
+      .skill-legend-pct { text-align:right; font-weight:800; color:#263d50; white-space:nowrap; }
+      .skill-legend-count { text-align:right; font-size:11px; color:#6d8192; }
+      .skill-card-footer { border-top:1px dashed #dce5ed; margin:0 16px; padding:10px 0 12px; text-align:center; color:#6b8295; font-size:11px; }
+      @media(max-width:1000px) { .skill-cards-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+      @media(max-width:650px) { .skill-cards-grid { grid-template-columns:1fr; } .skill-card-body { grid-template-columns:120px minmax(0,1fr); } }
       @media(max-width:850px) { .metric-row { grid-template-columns:minmax(140px, 1fr) 65px; gap:10px; } .metric-bar-area { grid-column:1 / -1; } }
       @media(max-width:700px) {
         .dashboard-header {
@@ -1086,15 +1103,7 @@ server <- function(input, output, session) {
           "Attack, blocking, serving, reception and other skill totals from the workbook."
         ),
 
-        div(
-          class = "chart-card",
-          plotOutput("skill_plot", height = 300)
-        ),
-
-        div(
-          class = "chart-card table-wrap",
-          tableOutput("skill_table")
-        )
+        uiOutput("skill_cards_ui")
       ),
 
       # 3. Attack Detail
@@ -1345,49 +1354,148 @@ server <- function(input, output, session) {
 
   # ---------------- BY SKILL ----------------
 
-  output$skill_plot <- renderPlot({
+  output$skill_cards_ui <- renderUI({
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
 
-    m <- current_match()
-    req(m)
+    all_skills <- bind_rows(lapply(selected_matches, function(mm) {
+      if (is.null(mm$skills) || !nrow(mm$skills)) return(tibble(skill=character(), metric=character(), value=numeric()))
+      mm$skills |>
+        mutate(skill = trimws(as.character(skill)), metric = trimws(as.character(metric)), value = suppressWarnings(as.numeric(value)))
+    }))
 
-    d <- m$skills |>
-      filter(!is.na(value))
+    if (!nrow(all_skills)) return(div(class="status-error", "No By Skill data found in the selected workbook(s)."))
 
-    validate(
-      need(nrow(d) > 0, "No By Skill data found.")
+    # Counts are summed across selected matches. Rate metrics are averaged where
+    # the workbook provides a pre-calculated rate. GAPP is always displayed as %.
+    get_value <- function(skill_name, metric_name) {
+      z <- all_skills[tolower(all_skills$skill) == tolower(skill_name) & tolower(all_skills$metric) == tolower(metric_name), , drop=FALSE]
+      if (!nrow(z)) return(NA_real_)
+      vals <- z$value[is.finite(z$value)]
+      if (!length(vals)) return(NA_real_)
+      if (grepl("%", metric_name, fixed=TRUE)) mean(vals) else sum(vals)
+    }
+
+    first_match <- selected_matches[[1]]
+    # Keep category names as in the workbook, while presenting a fixed card order.
+    find_skill <- function(pattern) {
+      hit <- unique(all_skills$skill[grepl(pattern, all_skills$skill, ignore.case=TRUE)])
+      if (length(hit)) hit[1] else NA_character_
+    }
+    attack_skill <- find_skill("^Attack$")
+    receive_skill <- find_skill("Serve Receive|Reception")
+    block_skill <- find_skill("Block")
+    serve_skill <- find_skill("^Serve$")
+    defense_skill <- find_skill("Defense")
+    gapp_skill <- find_skill("GAPP")
+
+    # Pull summed counts by skill; preserve the labels used in the Excel sheet.
+    skill_rows <- function(skill_name) {
+      if (is.na(skill_name)) return(tibble(metric=character(), value=numeric()))
+      all_skills |>
+        filter(tolower(skill) == tolower(skill_name), is.finite(value)) |>
+        group_by(metric) |>
+        summarise(value = if (any(grepl("%", metric, fixed=TRUE))) mean(value) else sum(value), .groups="drop")
+    }
+
+    make_card <- function(title, skill_name, center_value, center_label, legend_metrics, footer="") {
+      d <- skill_rows(skill_name)
+      if (is.na(skill_name) || !nrow(d)) {
+        return(div(class="skill-card", div(class="skill-card-header", title), div(class="skill-card-body", "No data in workbook")))
+      }
+      d$metric <- trimws(as.character(d$metric))
+      legend_metrics <- legend_metrics[legend_metrics %in% d$metric]
+      # Display only the compact categories requested for each demo card.
+      ld <- d[match(legend_metrics, d$metric), , drop=FALSE]
+      ld <- ld[!is.na(ld$metric) & is.finite(ld$value), , drop=FALSE]
+      counts <- pmax(0, ld$value)
+      total <- sum(counts, na.rm=TRUE)
+      palette <- c("#155A96", "#2F75B5", "#5A91C5", "#83AED2", "#A9C8E2", "#D0E2F0", "#194A73")
+      if (identical(title, "GAPP")) {
+        gapp_metric <- ld$value[grepl("GAPP", ld$metric, ignore.case=TRUE)]
+        gapp_actual <- if (length(gapp_metric) && is.finite(gapp_metric[1])) {
+          if (abs(gapp_metric[1]) <= 1) gapp_metric[1] * 100 else gapp_metric[1]
+        } else 0
+        gapp_actual <- max(0, min(100, gapp_actual))
+        pct <- gapp_actual
+        donut_style <- paste0("background:conic-gradient(#155A96 0% ", round(gapp_actual, 2), "%, #dce5ed ", round(gapp_actual, 2), "% 100%);")
+      } else if (nrow(ld) && total > 0) {
+        pct <- counts / total * 100
+        ends <- cumsum(pct)
+        starts <- c(0, head(ends, -1))
+        slices <- paste0(palette[(seq_len(nrow(ld))-1) %% length(palette)+1], " ", round(starts, 2), "% ", round(ends, 2), "%")
+        donut_style <- paste0("background:conic-gradient(", paste(slices, collapse=", "), ");")
+      } else {
+        pct <- rep(0, nrow(ld))
+        donut_style <- "background:conic-gradient(#dce5ed 0% 100%);"
+      }
+      if (nrow(ld)) {
+        legend <- lapply(seq_len(nrow(ld)), function(i) {
+          val <- ld$value[i]
+          show_pct <- if (identical(title, "GAPP")) pct else if (total > 0) pct[i] else 0
+          div(class="skill-legend-row",
+            div(class="skill-legend-swatch", style=paste0("background:", palette[(i-1) %% length(palette)+1])),
+            div(class="skill-legend-name", ld$metric[i]),
+            div(class="skill-legend-pct", paste0(round(show_pct), "%")),
+            div(class="skill-legend-count", if (abs(val-round(val)) < .001) as.character(round(val)) else format(round(val, 1), nsmall=1))
+          )
+        })
+      } else legend <- list(div("No category data"))
+      div(class="skill-card",
+        div(class="skill-card-header", title, span(style="font-size:10px;opacity:.9;", center_label)),
+        div(class="skill-card-body",
+          div(class="skill-donut", style=donut_style,
+            div(class="skill-donut-hole",
+              div(class="skill-donut-value", center_value),
+              div(class="skill-donut-label", center_label)
+            )
+          ),
+          div(class="skill-legend", legend)
+        ),
+        div(class="skill-card-footer", if (nzchar(footer)) footer else paste(sum(counts, na.rm=TRUE), "recorded outcomes across selected matches"))
+      )
+    }
+
+    # Exact workbook metric labels from the supplied By Skill sheet.
+    attack <- skill_rows(attack_skill)
+    attack_get <- function(nm) { z <- attack$value[tolower(attack$metric)==tolower(nm)]; if(length(z)) z[1] else NA_real_ }
+    swings <- attack_get("Total Swings"); kills <- attack_get("Kills"); errors <- attack_get("Error")
+    attack_eff <- if (is.finite(swings) && swings > 0 && is.finite(kills) && is.finite(errors)) (kills-errors)/swings else NA_real_
+    attack_center <- if (is.finite(attack_eff)) sprintf("%.3f", attack_eff) else if (is.finite(kills)) as.character(round(kills)) else "—"
+    attack_label <- if (is.finite(attack_eff)) "ATK EFF" else "KILLS"
+
+    rec <- skill_rows(receive_skill)
+    rec_get <- function(nm) { z <- rec$value[tolower(rec$metric)==tolower(nm)]; if(length(z)) z[1] else NA_real_ }
+    good_rec <- rec_get("Good Pass"); oos_rec <- rec_get("OOS Pass"); aced_rec <- rec_get("Aced"); over_rec <- rec_get("Overpass")
+    rec_total <- sum(c(good_rec,oos_rec,aced_rec,over_rec)[is.finite(c(good_rec,oos_rec,aced_rec,over_rec))])
+    in_system <- if (rec_total > 0 && is.finite(good_rec) && is.finite(oos_rec)) (good_rec+oos_rec)/rec_total*100 else NA_real_
+    rec_center <- if (is.finite(in_system)) paste0(round(in_system), "%") else "—"
+
+    block <- skill_rows(block_skill)
+    block_total <- sum(block$value[is.finite(block$value)], na.rm=TRUE)
+    block_center <- if (block_total > 0) as.character(round(block_total)) else "—"
+
+    serve <- skill_rows(serve_skill)
+    defense <- skill_rows(defense_skill)
+    gapp <- skill_rows(gapp_skill)
+    gapp_val <- gapp$value[tolower(gapp$metric)==tolower("GAPP %")]
+    if (!length(gapp_val)) gapp_val <- gapp$value[grepl("GAPP", gapp$metric, ignore.case=TRUE)]
+    gapp_pct <- if (length(gapp_val) && is.finite(gapp_val[1])) if (abs(gapp_val[1]) <= 1) gapp_val[1]*100 else gapp_val[1] else NA_real_
+    possessions <- gapp$value[grepl("Total Possessions", gapp$metric, ignore.case=TRUE)]
+    attacks <- gapp$value[tolower(gapp$metric)==tolower("Attacks")]
+    gapp_footer <- paste0(if(length(attacks)) round(attacks[1]) else "—", " attacks / ", if(length(possessions)) round(possessions[1]) else "—", " possessions")
+
+    tagList(
+      div(class="skill-cards-grid",
+        make_card("ATTACK", attack_skill, attack_center, attack_label, c("Kills", "In Play", "Blocked", "Error", "Total Swings"), if (is.finite(swings)) paste0("Kill% ", if(swings>0) round(kills/swings*100) else 0, " · ", round(swings), " swings") else ""),
+        make_card("SERVE RECEIVE", receive_skill, rec_center, "IN SYSTEM", c("Good Pass", "OOS Pass", "Aced", "Overpass"), if(is.finite(rec_total)) paste0(round(rec_total), " receptions") else ""),
+        make_card("BLOCK", block_skill, block_center, "BLOCK EVENTS", c("Stuff", "Positive", "Fulfilled", "Negative", "Error")),
+        make_card("SERVE", serve_skill, as.character(round(sum(serve$value[!grepl("%", serve$metric, fixed=TRUE)], na.rm=TRUE))), "SERVES", c("Aces", "Overpass", "OOS Pass", "Good Pass", "Serve Error")),
+        make_card("DEFENSE", defense_skill, as.character(round(sum(defense$value[!grepl("%", defense$metric, fixed=TRUE)], na.rm=TRUE))), "DIGS", c("Digs", "In Play", "Kills (Converted)")),
+        make_card("GAPP", gapp_skill, if(is.finite(gapp_pct)) paste0(round(gapp_pct, 1), "%") else "—", "GAPP %", c("Total Possessions", "Attacks", "GAPP %"), gapp_footer)
+      )
     )
-
-    ggplot(
-      d,
-      aes(
-        x = reorder(metric, value),
-        y = value,
-        fill = skill
-      )
-    ) +
-      geom_col(show.legend = FALSE) +
-      coord_flip() +
-      facet_wrap(~skill, scales = "free_y") +
-      labs(
-        x = NULL,
-        y = "Workbook value"
-      ) +
-      theme_minimal(base_size = 12)
   })
-
-  output$skill_table <- renderTable({
-
-    m <- current_match()
-    req(m)
-
-    m$skills |>
-      rename(
-        Skill = skill,
-        Metric = metric,
-        Value = value
-      )
-
-  }, striped = TRUE, bordered = FALSE, spacing = "s")
 
   # ---------------- ATTACK DETAIL ----------------
 
