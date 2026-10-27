@@ -789,11 +789,11 @@ ui <- page_fluid(
       .passing-section-note { color:#718397; font-size:12px; margin:0 0 12px; }
       .passing-player-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; align-items:stretch; }
       .passing-player-card { background:#fff; border:1px solid #d8e2ec; border-radius:13px; overflow:hidden; box-shadow:0 3px 10px rgba(18,45,75,.06); min-width:0; }
-      .passing-player-header { background:#bd5700 !important; color:#fff !important; padding:11px 14px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:800; }
+      .passing-player-header { background:#123f68 !important; color:#fff !important; padding:11px 14px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:800; }
       .passing-player-name { font-size:15px; line-height:1.2; }
       .passing-player-meta { font-size:11px; font-weight:500; opacity:.9; white-space:nowrap; }
       .passing-player-caption { padding:9px 12px 0; color:#718397; font-size:10px; }
-      .passing-court-stage { display:grid; grid-template-columns:minmax(0,1fr) 112px minmax(0,1fr); grid-template-rows:54px 150px 54px; gap:5px 2px; padding:8px 9px 15px; min-height:295px; align-items:center; }
+      .passing-court-stage { display:grid; grid-template-columns:minmax(0,1fr) 190px minmax(0,1fr); grid-template-rows:54px 205px 54px; gap:5px 2px; padding:8px 9px 15px; min-height:350px; align-items:center; }
       .passing-point { text-align:center; min-width:0; z-index:2; color:#5d7081; }
       .passing-point-title { font-size:10px; letter-spacing:.35px; text-transform:uppercase; font-weight:800; margin-bottom:3px; }
       .passing-point-count { font-size:25px; font-weight:900; line-height:1; color:#263746; }
@@ -803,15 +803,16 @@ ui <- page_fluid(
       .passing-left { grid-column:1; grid-row:2; }
       .passing-right { grid-column:3; grid-row:2; }
       .passing-low { grid-column:1 / 4; grid-row:3; }
-      .passing-player-figure { grid-column:2; grid-row:2; height:150px; width:112px; display:flex; justify-content:center; align-items:center; position:relative; z-index:1; }
-      .passing-player-figure img { max-width:100%; max-height:100%; object-fit:contain; }
-      .passing-body-point { position:absolute; top:47%; left:50%; transform:translate(-50%,-50%); width:112px; min-height:54px; padding:5px 4px; border:1px solid #d7e1eb; border-radius:4px; background:rgba(255,255,255,.94); text-align:center; box-shadow:0 1px 4px rgba(15,35,55,.05); }
+      .passing-player-figure { grid-column:2; grid-row:2; height:205px; width:190px; display:flex; justify-content:center; align-items:center; position:relative; z-index:1; overflow:visible; }
+      .passing-player-figure img { display:block; width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; object-position:center; }
+      .passing-body-point { position:absolute; top:49%; left:50%; transform:translate(-50%,-50%); width:100%; min-height:54px; padding:5px 4px; border:0; border-radius:0; background:rgba(255,255,255,.18); text-align:center; box-shadow:none; }
       .passing-body-point .passing-point-title { font-size:9px; margin:0; }
       .passing-body-point .passing-point-count { font-size:21px; }
       .passing-player-footer { border-top:1px solid #e7edf2; padding:8px 12px; display:flex; justify-content:space-between; color:#607488; font-size:10px; gap:8px; }
       .passing-player-footer strong { color:#263746; }
       @media(max-width:1050px) { .passing-player-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-      @media(max-width:650px) { .passing-player-grid { grid-template-columns:1fr; } .passing-court-stage { grid-template-columns:minmax(0,1fr) 100px minmax(0,1fr); } .passing-player-figure { width:100px; } .passing-body-point { width:100px; } }
+      @media(max-width:1050px) { .passing-court-stage { grid-template-columns:minmax(0,1fr) 170px minmax(0,1fr); } .passing-player-figure { width:170px; } }
+      @media(max-width:650px) { .passing-player-grid { grid-template-columns:1fr; } .passing-court-stage { grid-template-columns:minmax(0,1fr) 145px minmax(0,1fr); grid-template-rows:54px 185px 54px; } .passing-player-figure { width:145px; height:185px; } .passing-body-point { width:100%; } }
       @media(max-width:1000px) { .skill-cards-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
       @media(max-width:650px) { .skill-cards-grid { grid-template-columns:1fr; } .skill-card-body { grid-template-columns:120px minmax(0,1fr); } }
       @media(max-width:850px) { .metric-row { grid-template-columns:minmax(140px, 1fr) 65px; gap:10px; } .metric-bar-area { grid-column:1 / -1; } }
@@ -2258,7 +2259,7 @@ server <- function(input, output, session) {
       total_good <- sum(rows$`Good Pass`, na.rm = TRUE)
       total_aced <- sum(rows$Aced, na.rm = TRUE)
       div(class = "passing-player-card",
-        div(class = "passing-player-header", style = "background-color:#bd5700 !important; color:#ffffff !important;",
+        div(class = "passing-player-header", style = "background-color:#123f68 !important; color:#ffffff !important;",
           div(class = "passing-player-name", paste0("#", pl$`Player No.`, " ", pl$`Player Name`)),
           div(class = "passing-player-meta", ifelse(is.na(pl$Position) || !nzchar(pl$Position), "", pl$Position))
         ),
