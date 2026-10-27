@@ -1285,11 +1285,17 @@ server <- function(input, output, session) {
           .setting-stats-card .table-responsive { width:100%; }
           .setting-stats-card th, .setting-stats-card td { white-space:normal; text-align:center !important; vertical-align:middle; }
           .setting-stats-card thead th { font-weight:800; }
-          .setting-stats-card tbody td { font-weight:700; font-variant-numeric:tabular-nums; }
-          .rotation-setting-card tbody tr:last-child td { background:#e7eef5 !important; color:#17324d !important; font-weight:900 !important; border-top:3px solid #17324d; }
-          .setting-stats-card tbody td:first-child { font-weight:900; }
+          /* Keep ordinary setting-table values readable without making every number bold. */
+          .setting-stats-card tbody td { font-weight:400 !important; font-variant-numeric:tabular-nums; }
+          .setting-stats-card tbody td:first-child { font-weight:400 !important; }
           .setting-stats-card .table-responsive table { margin:0; }
-          .rotation-setting-card tbody tr:last-child td { background:#e7eef5 !important; }
+          /* Emphasize only the Total row in Rotation setting totals. */
+          .rotation-setting-card tbody tr:last-child td {
+            background:#e7eef5 !important;
+            color:#17324d !important;
+            font-weight:800 !important;
+            border-top:3px solid #17324d;
+          }
         ")),
 
         div(
