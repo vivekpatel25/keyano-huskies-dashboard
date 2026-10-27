@@ -620,6 +620,57 @@ ui <- page_fluid(
         box-sizing: border-box;
       }
 
+      /* Emphasize attack-type labels and efficiency values in Attack Detail. */
+      #attack_table table tbody td:first-child,
+      #attack_table table tbody td:nth-child(n+5) {
+        font-weight: 700 !important;
+      }
+
+      .rotation-heatmap-wrap {
+        width: 100%;
+        overflow-x: auto;
+      }
+      table.rotation-heatmap {
+        width: 100%;
+        min-width: 1000px;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 12px;
+        color: #17324d;
+      }
+      .rotation-heatmap th,
+      .rotation-heatmap td {
+        padding: 9px 8px;
+        text-align: center;
+        white-space: nowrap;
+        border-bottom: 1px solid #d9e2eb;
+      }
+      .rotation-heatmap thead tr:first-child th {
+        background: #fff;
+        color: #52677b;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+        border-bottom: 0;
+      }
+      .rotation-heatmap thead tr:nth-child(2) th {
+        background: #f7f9fb;
+        color: #52677b;
+        font-weight: 800;
+        border-top: 1px solid #d9e2eb;
+      }
+      .rotation-heatmap tbody td:first-child {
+        text-align: left;
+        font-weight: 800;
+        background: #f7f9fb;
+      }
+      .rotation-heatmap tbody tr.average-row td {
+        font-weight: 800;
+        border-top: 3px solid #17324d;
+        border-bottom: 0;
+      }
+
       .analytics-section {
         padding: 4px 0 26px;
         margin-bottom: 20px;
@@ -1201,7 +1252,7 @@ server <- function(input, output, session) {
 
         div(
           class = "chart-card table-wrap",
-          tableOutput("rotation_table")
+          uiOutput("rotation_table")
         )
       ),
 
@@ -1835,14 +1886,100 @@ server <- function(input, output, session) {
       )
   })
 
-  output$rotation_table <- renderTable({
+  output$rotation_table <- renderUI({
 
     m <- current_match()
     req(m)
 
-    m$rotation
+    d <- m$rotation
+    validate(need(is.data.frame(d) && nrow(d) > 0, "No rotation details are available."))
 
-  }, striped = TRUE, bordered = FALSE, spacing = "s")
+    # Group headings mirror the Rotation Details worksheet.
+    groups <- list(
+      "Game Phase" = c("SO%", "PS%"),
+      "Serve" = c("Ace", "Serve Err", "Serve Att", "Serve In %"),
+      "Reception" = c("SR Perf", "SR Good", "SR Poor", "SR Err", "SR Att"),
+      "Attack" = c("Kill", "A Err", "Att", "H %")
+    )
+    ordered_cols <- c("Rotation", unlist(groups, use.names = FALSE))
+    cols <- ordered_cols[ordered_cols %in% names(d)]
+    validate(need("Rotation" %in% cols, "Rotation column is missing."))
+
+    d <- d[, cols, drop = FALSE]
+    for (nm in setdiff(names(d), "Rotation")) {
+      d[[nm]] <- suppressWarnings(as.numeric(d[[nm]]))
+    }
+
+    # Add an average row beneath Ro1-Ro6.
+    metric_cols <- setdiff(names(d), "Rotation")
+    avg <- as.list(rep(NA_real_, length(names(d))))
+    names(avg) <- names(d)
+    avg$Rotation <- "AVG"
+    for (nm in metric_cols) {
+      x <- d[[nm]]
+      avg[[nm]] <- if (any(is.finite(x))) mean(x[is.finite(x)]) else NA_real_
+    }
+    display_data <- bind_rows(d, as.data.frame(avg, check.names = FALSE))
+
+    # Colour values relative to the six rotations; no Top 50 comparison.
+    lower_is_better <- c("Serve Err", "SR Poor", "SR Err", "A Err")
+    cell_colour <- function(value, values, metric) {
+      valid <- values[is.finite(values)]
+      if (!is.finite(value) || length(valid) < 2 || diff(range(valid)) == 0) {
+        return("#f3f6f8")
+      }
+      score <- (value - min(valid)) / (max(valid) - min(valid))
+      if (metric %in% lower_is_better) score <- 1 - score
+      palette <- grDevices::colorRampPalette(c("#e88978", "#fff0b3", "#59b78b"))(101)
+      palette[max(1, min(101, round(score * 100) + 1))]
+    }
+
+    format_cell <- function(value, metric) {
+      if (!is.finite(value)) return("—")
+      if (metric %in% c("SO%", "PS%", "Serve In %")) return(sprintf("%.1f%%", value * 100))
+      if (metric == "H %") return(sprintf("%.3f", value))
+      if (metric %in% c("Ace", "Serve Err", "Serve Att", "SR Good", "SR Poor", "SR Err", "SR Att", "Kill", "A Err", "Att")) {
+        return(as.character(round(value)))
+      }
+      sprintf("%.1f", value)
+    }
+
+    group_header <- list(tags$th(rowspan = 2, "Rotation"))
+    for (group_name in names(groups)) {
+      present <- intersect(groups[[group_name]], cols)
+      if (length(present)) {
+        group_header[[length(group_header) + 1]] <- tags$th(colspan = length(present), group_name)
+      }
+    }
+    sub_header <- lapply(cols[-1], function(nm) tags$th(nm))
+
+    body_rows <- lapply(seq_len(nrow(display_data)), function(i) {
+      is_avg <- identical(as.character(display_data$Rotation[i]), "AVG")
+      row_cells <- lapply(cols, function(nm) {
+        if (nm == "Rotation") {
+          tags$td(style = "text-align:left;font-weight:800;",
+                  as.character(display_data$Rotation[i]))
+        } else {
+          value <- display_data[[nm]][i]
+          bg <- cell_colour(value, d[[nm]], nm)
+          tags$td(
+            style = paste0("background-color:", bg, ";font-variant-numeric:tabular-nums;"),
+            format_cell(value, nm)
+          )
+        }
+      })
+      tags$tr(class = if (is_avg) "average-row" else NULL, row_cells)
+    })
+
+    div(
+      class = "rotation-heatmap-wrap",
+      tags$table(
+        class = "rotation-heatmap",
+        tags$thead(tags$tr(group_header), tags$tr(sub_header)),
+        tags$tbody(body_rows)
+      )
+    )
+  })
 
   # ---------------- SETTING STATS ----------------
 
