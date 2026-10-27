@@ -906,7 +906,7 @@ ui <- page_fluid(
 
   div(
     class = "footer-note",
-    "Keyano Huskies · ACAC · 2026–27 | Internal performance analysis"
+    "Keyano Huskies · ACAC · 2026–27 | Internal performance analysis | Post match Report"
   )
 )
 
