@@ -667,7 +667,16 @@ ui <- page_fluid(
       .skill-card { background:#fff; border:1px solid #dce5ed; border-radius:13px; overflow:hidden; box-shadow:0 3px 10px rgba(18,45,75,.06); }
       .skill-card-header { background:#155A96; color:#fff; padding:12px 16px; font-weight:800; letter-spacing:.5px; display:flex; justify-content:space-between; align-items:center; }
       .skill-card-body { display:grid; grid-template-columns:135px minmax(0,1fr); gap:12px; align-items:center; padding:16px; min-height:190px; }
+      .skill-donut-wrap { width:142px; height:142px; position:relative; display:flex; align-items:center; justify-content:center; margin:auto; }
       .skill-donut { width:124px; height:124px; border-radius:50%; display:flex; align-items:center; justify-content:center; position:relative; margin:auto; }
+      .skill-outer-ring { position:absolute; inset:0; border-radius:50%; -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px)); mask:radial-gradient(farthest-side, transparent calc(100% - 7px), #000 calc(100% - 6px)); }
+      .skill-rate-bar { padding:0 16px 8px; }
+      .skill-rate-bar-label { display:flex; justify-content:space-between; gap:8px; font-size:12px; color:#263d50; margin-bottom:6px; }
+      .skill-rate-track { height:9px; border-radius:99px; background:#f4eae2; overflow:hidden; }
+      .skill-rate-fill { height:100%; border-radius:99px; }
+      .rate-good { background:#159b68; }
+      .rate-bad { background:#df4b3e; }
+      .skill-rate-scale { display:flex; justify-content:space-between; font-size:9px; color:#8a99a6; margin-top:2px; }
       .skill-donut-hole { background:#fff; width:76px; height:76px; border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; box-shadow:0 0 0 1px #edf1f4; }
       .skill-donut-value { font-size:20px; line-height:1.05; font-weight:900; color:#18344c; }
       .skill-donut-label { font-size:8px; letter-spacing:.7px; color:#60788b; font-weight:800; margin-top:4px; }
@@ -1378,6 +1387,12 @@ server <- function(input, output, session) {
       hit <- unique(all_skills$skill[grepl(pattern, all_skills$skill, ignore.case=TRUE)])
       if (length(hit)) hit[1] else NA_character_
     }
+    attack_skill <- find_skill("^Attack$")
+    receive_skill <- find_skill("Serve Receive|Reception")
+    block_skill <- find_skill("Block")
+    serve_skill <- find_skill("^Serve$")
+    defense_skill <- find_skill("Defense")
+    gapp_skill <- find_skill("GAPP")
 
     skill_rows <- function(skill_name) {
       if (is.na(skill_name)) return(tibble(metric=character(), value=numeric()))
@@ -1389,198 +1404,164 @@ server <- function(input, output, session) {
           .groups="drop"
         )
     }
+    get_skill_value <- function(d, nm) {
+      z <- d$value[tolower(trimws(d$metric)) == tolower(trimws(nm))]
+      if (length(z)) z[1] else NA_real_
+    }
+    key_metric_mean <- function(metric_name) {
+      vals <- vapply(selected_matches, function(mm) {
+        k <- mm$key
+        if (is.null(k) || !nrow(k)) return(NA_real_)
+        idx <- which(tolower(trimws(k$metric)) == tolower(trimws(metric_name)))
+        if (!length(idx)) return(NA_real_)
+        suppressWarnings(as.numeric(k$value[idx[1]]))
+      }, numeric(1))
+      if (any(is.finite(vals))) mean(vals[is.finite(vals)]) else NA_real_
+    }
+    pct_value <- function(x) {
+      if (!length(x) || !is.finite(x)) return(NA_real_)
+      if (abs(x) <= 1) x * 100 else x
+    }
 
-    attack_skill <- find_skill("^Attack$")
-    receive_skill <- find_skill("Serve Receive|Reception")
-    block_skill <- find_skill("^Blocks?$|Block")
-    serve_skill <- find_skill("^Serve$")
-    defense_skill <- find_skill("^Defense$")
-    gapp_skill <- find_skill("GAPP")
-
-    # Each legend row is explicitly configured so reference-only totals are
-    # not mistaken for donut slices or given misleading percentages.
+    # Positive/negative outcome colours; card headers remain Huskies blue.
+    palette <- c("#159B68", "#2F75B5", "#E5483B", "#E6A52B", "#7D9DB8", "#A9C8E2")
     make_card <- function(title, skill_name, center_value, center_label,
-                          legend_metrics, footer="", legend_mode="share",
-                          accent_metric=NULL, accent_label=NULL, accent_value=NULL) {
+                          legend_metrics, footer="", extra_bar=NULL,
+                          outer_ring_pct=NULL, show_legend_pct=TRUE) {
       d <- skill_rows(skill_name)
       if (is.na(skill_name) || !nrow(d)) {
-        return(div(class="skill-card",
-          div(class="skill-card-header", title),
-          div(class="skill-card-body", "No data in workbook")
-        ))
+        return(div(class="skill-card", div(class="skill-card-header", title),
+                   div(class="skill-card-body", "No data in workbook")))
       }
-
-      getv <- function(nm) {
-        z <- d$value[tolower(d$metric) == tolower(nm)]
-        if (length(z)) z[1] else NA_real_
-      }
-
+      d$metric <- trimws(as.character(d$metric))
+      legend_metrics <- legend_metrics[legend_metrics %in% d$metric]
       ld <- d[match(legend_metrics, d$metric), , drop=FALSE]
       ld <- ld[!is.na(ld$metric) & is.finite(ld$value), , drop=FALSE]
-
-      # Semantically meaningful palette: good outcomes green/blue, errors red,
-      # neutral outcomes lighter blue. Headers remain Huskies blue.
-      colour_for <- function(label) {
-        z <- tolower(label)
-        if (grepl("error|aced|overpass|negative|blocked", z)) return("#E24A3B")
-        if (grepl("kill|stuff|good pass|in play|converted", z)) return("#159B68")
-        if (grepl("positive|oos pass|out-of-system", z)) return("#2F75B5")
-        if (grepl("medium|fulfilled", z)) return("#6D9FCB")
-        "#9BBBD6"
-      }
-
-      cols <- if (nrow(ld)) vapply(ld$metric, colour_for, character(1)) else character()
-      # Donuts show outcome distributions. GAPP is a single percentage ring;
-      # possessions and attacks are reference counts, never donut slices.
-      slice_values <- pmax(0, ld$value)
-      if (identical(title, "GAPP")) {
-        gapp_share <- suppressWarnings(as.numeric(gapp_pct))
-        if (!is.finite(gapp_share)) gapp_share <- 0
-        gapp_share <- max(0, min(100, gapp_share))
-        shares <- rep(0, nrow(ld))
-        donut_style <- paste0(
-          "background:conic-gradient(#155A96 0% ", round(gapp_share, 2),
-          "%, #dce5ed ", round(gapp_share, 2), "% 100%);"
-        )
-      } else if (nrow(ld) && sum(slice_values, na.rm=TRUE) > 0) {
-        shares <- slice_values / sum(slice_values, na.rm=TRUE) * 100
-        ends <- cumsum(shares)
+      counts <- pmax(0, ld$value)
+      total <- sum(counts, na.rm=TRUE)
+      pct <- if (total > 0) counts / total * 100 else rep(0, length(counts))
+      donut_style <- if (length(pct) && total > 0) {
+        ends <- cumsum(pct)
         starts <- c(0, head(ends, -1))
-        slices <- paste0(cols, " ", round(starts, 2), "% ", round(ends, 2), "%")
-        donut_style <- paste0("background:conic-gradient(", paste(slices, collapse=", "), ");")
+        slices <- paste0(
+          palette[(seq_along(pct)-1) %% length(palette)+1],
+          " ", round(starts, 2), "% ", round(ends, 2), "%"
+        )
+        paste0("background:conic-gradient(", paste(slices, collapse=", "), ");")
       } else {
-        shares <- rep(0, nrow(ld))
-        donut_style <- "background:conic-gradient(#dce5ed 0% 100%);"
+        "background:conic-gradient(#dce5ed 0% 100%);"
       }
+      legend <- if (nrow(ld)) lapply(seq_len(nrow(ld)), function(i) {
+        val <- ld$value[i]
+        div(class="skill-legend-row",
+          div(class="skill-legend-swatch", style=paste0("background:", palette[(i-1) %% length(palette)+1])),
+          div(class="skill-legend-name", ld$metric[i]),
+          div(class="skill-legend-pct",
+              if (show_legend_pct) paste0(round(pct[i]), "%") else ""),
+          div(class="skill-legend-count",
+              if (abs(val-round(val)) < .001) as.character(round(val)) else format(round(val, 1), nsmall=1))
+        )
+      }) else list(div("No category data"))
 
-      legend <- if (nrow(ld)) {
-        lapply(seq_len(nrow(ld)), function(i) {
-          val <- ld$value[i]
-          show_pct <- if (legend_mode == "none") "" else paste0(round(shares[i]), "%")
-          div(class="skill-legend-row",
-            div(class="skill-legend-swatch", style=paste0("background:", cols[i])),
-            div(class="skill-legend-name", ld$metric[i]),
-            div(class="skill-legend-pct", show_pct),
-            div(class="skill-legend-count",
-              if (abs(val-round(val)) < .001) as.character(round(val)) else format(round(val, 1), nsmall=1)
-            )
-          )
-        })
-      } else list(div("No category data"))
-
-      extra <- NULL
-      if (!is.null(accent_metric) && is.finite(accent_value)) {
-        accent_pct <- max(0, min(100, accent_value))
-        extra <- div(class="skill-accent",
-          div(class="skill-accent-heading",
-            span(accent_metric),
-            strong(if (grepl("%", accent_label, fixed=TRUE)) paste0(round(accent_value, 1), "%") else accent_label)
-          ),
-          div(class="skill-accent-track",
-            div(class="skill-accent-fill", style=paste0("width:", accent_pct, "%"))
+      donut <- div(class="skill-donut-wrap",
+        if (!is.null(outer_ring_pct) && is.finite(outer_ring_pct)) {
+          div(class="skill-outer-ring",
+              style=paste0("background:conic-gradient(#E6A52B 0% ", max(0,min(100,outer_ring_pct)), "%, #eaf0f4 ", max(0,min(100,outer_ring_pct)), "% 100%);"))
+        },
+        div(class="skill-donut", style=donut_style,
+          div(class="skill-donut-hole",
+            div(class="skill-donut-value", center_value),
+            div(class="skill-donut-label", center_label)
           )
         )
-      }
-
+      )
       div(class="skill-card",
-        div(class="skill-card-header", title, span(class="skill-card-tag", center_label)),
+        div(class="skill-card-header", title, span(style="font-size:10px;opacity:.9;", center_label)),
         div(class="skill-card-body",
-          div(class="skill-donut-wrap",
-            div(class="skill-donut", style=donut_style,
-              div(class="skill-donut-hole",
-                div(class="skill-donut-value", center_value),
-                div(class="skill-donut-label", center_label)
-              )
-            )
-          ),
+          donut,
           div(class="skill-legend", legend)
         ),
-        if (!is.null(extra)) extra,
+        if (!is.null(extra_bar) && is.finite(extra_bar$value)) {
+          div(class="skill-rate-bar",
+            div(class="skill-rate-bar-label",
+              span(extra_bar$label),
+              strong(paste0(round(extra_bar$value, 1), "%"))
+            ),
+            div(class="skill-rate-track",
+              div(class=paste("skill-rate-fill", if (isTRUE(extra_bar$lower_better)) "rate-bad" else "rate-good"),
+                  style=paste0("width:", max(0,min(100,extra_bar$value/50*100)), "%"))
+            ),
+            div(class="skill-rate-scale", "0%", "50%")
+          )
+        },
         div(class="skill-card-footer", footer)
       )
     }
 
-    # Attack: total swings is reference-only, not a donut slice.
     attack <- skill_rows(attack_skill)
-    av <- function(nm) { z <- attack$value[tolower(attack$metric)==tolower(nm)]; if(length(z)) z[1] else NA_real_ }
-    swings <- av("Total Swings")
-    kills <- av("Kills")
-    errors <- av("Error")
-    attack_eff <- if (is.finite(swings) && swings > 0 && is.finite(kills) && is.finite(errors)) (kills-errors)/swings else NA_real_
-    attack_center <- if (is.finite(attack_eff)) sprintf("%.3f", attack_eff) else "—"
-    attack_footer <- if (is.finite(kills) && is.finite(swings) && swings > 0) {
-      paste0("Kill% ", round(kills/swings*100), " · ", round(swings), " swings (reference)")
-    } else ""
+    attack_get <- function(nm) get_skill_value(attack, nm)
+    swings <- attack_get("Total Swings")
+    kills <- attack_get("Kills")
+    attack_eff <- key_metric_mean("Attack Efficiency")
+    attack_center <- if (is.finite(attack_eff)) {
+      sprintf("%.3f", attack_eff)
+    } else "—"
 
-    # Serve receive: percentages represent the distribution of reception outcomes.
     rec <- skill_rows(receive_skill)
-    rv <- function(nm) { z <- rec$value[tolower(rec$metric)==tolower(nm)]; if(length(z)) z[1] else NA_real_ }
-    good_rec <- rv("Good Pass"); oos_rec <- rv("OOS Pass"); aced_rec <- rv("Aced"); over_rec <- rv("Overpass")
+    rec_get <- function(nm) get_skill_value(rec, nm)
+    good_rec <- rec_get("Good Pass")
+    oos_rec <- rec_get("OOS Pass")
+    aced_rec <- rec_get("Aced")
+    over_rec <- rec_get("Overpass")
     rec_total <- sum(c(good_rec,oos_rec,aced_rec,over_rec)[is.finite(c(good_rec,oos_rec,aced_rec,over_rec))])
-    in_system <- if (rec_total > 0 && is.finite(good_rec) && is.finite(oos_rec)) (good_rec+oos_rec)/rec_total*100 else NA_real_
-    allowed_disruption <- rv("Allowed Disruption %")
-    if (is.finite(allowed_disruption) && abs(allowed_disruption) <= 1) allowed_disruption <- allowed_disruption * 100
+    good_pct <- if (rec_total > 0 && is.finite(good_rec)) good_rec / rec_total * 100 else NA_real_
+    allowed_disruption <- pct_value(rec_get("Allowed Disruption %"))
 
-    # Block: only actual block outcomes are sliced.
     block <- skill_rows(block_skill)
     block_total <- sum(block$value[tolower(block$metric) %in% tolower(c("Stuff","Positive","Fulfilled","Negative","Error"))], na.rm=TRUE)
 
-    # Serve: disruption is a separate bar; it is not a slice in the serve donut.
     serve <- skill_rows(serve_skill)
-    sv <- function(nm) { z <- serve$value[tolower(serve$metric)==tolower(nm)]; if(length(z)) z[1] else NA_real_ }
-    serve_count_metrics <- c("Aces", "Overpass", "OOS Pass", "Good Pass", "Serve Error")
-    serve_total <- sum(serve$value[tolower(serve$metric) %in% tolower(serve_count_metrics)], na.rm=TRUE)
-    disruption <- sv("Disruption %")
-    if (is.finite(disruption) && abs(disruption) <= 1) disruption <- disruption * 100
+    serve_get <- function(nm) get_skill_value(serve, nm)
+    serve_count <- sum(serve$value[!grepl("%", serve$metric, fixed=TRUE)], na.rm=TRUE)
+    disruption <- pct_value(serve_get("Disruption %"))
 
-    # Defense: center is the workbook's actual Digs value, not the sum of
-    # Digs + In Play + Kills (Converted). Conversion is shown separately.
     defense <- skill_rows(defense_skill)
-    dv <- function(nm) { z <- defense$value[tolower(defense$metric)==tolower(nm)]; if(length(z)) z[1] else NA_real_ }
-    digs <- dv("Digs")
-    converted <- dv("Kills (Converted)")
-    in_play <- dv("In Play")
+    digs <- get_skill_value(defense, "Digs")
+    in_play <- get_skill_value(defense, "In Play")
+    converted <- get_skill_value(defense, "Kills (Converted)")
     conversion <- if (is.finite(in_play) && in_play > 0 && is.finite(converted)) converted/in_play*100 else NA_real_
 
-    # GAPP is a percentage. Possessions and attacks are reference totals only.
     gapp <- skill_rows(gapp_skill)
-    gv <- function(nm) { z <- gapp$value[tolower(gapp$metric)==tolower(nm)]; if(length(z)) z[1] else NA_real_ }
-    gapp_val <- gv("GAPP %")
-    if (!is.finite(gapp_val)) gapp_val <- gv("GAPP")
-    gapp_pct <- if (is.finite(gapp_val)) if (abs(gapp_val) <= 1) gapp_val*100 else gapp_val else NA_real_
-    possessions <- gv("Total Possessions")
-    attacks <- gv("Attacks")
-    gapp_footer <- paste0(if(is.finite(attacks)) round(attacks) else "—",
-      " attacks / ", if(is.finite(possessions)) round(possessions) else "—", " possessions")
+    gapp_val <- get_skill_value(gapp, "GAPP %")
+    gapp_pct <- pct_value(gapp_val)
+    possessions <- get_skill_value(gapp, "Total Possessions")
+    attacks <- get_skill_value(gapp, "Attacks")
 
     tagList(
       div(class="skill-cards-grid",
         make_card("ATTACK", attack_skill, attack_center, "ATK EFF",
           c("Kills", "In Play", "Blocked", "Error"),
-          attack_footer, "share"),
+          if (is.finite(swings)) paste0("Kill% ", if(is.finite(kills) && swings>0) round(kills/swings*100) else 0, " · ", round(swings), " swings (reference)") else ""),
         make_card("SERVE RECEIVE", receive_skill,
-          if(is.finite(in_system)) paste0(round(in_system), "%") else "—", "IN SYSTEM",
-          c("Good Pass", "OOS Pass", "Aced", "Overpass"),
+          if (is.finite(good_pct)) paste0(round(good_pct), "%") else "—",
+          "GOOD PASS", c("Good Pass", "OOS Pass", "Aced", "Overpass"),
           if(is.finite(rec_total)) paste0(round(rec_total), " receptions") else "",
-          "share", "Allowed Disruption %", "%", allowed_disruption),
-        make_card("BLOCK", block_skill,
-          if(is.finite(block_total)) as.character(round(block_total)) else "—", "BLOCK EVENTS",
-          c("Stuff", "Positive", "Fulfilled", "Negative", "Error"),
-          if(is.finite(block_total)) paste0(round(block_total), " block outcomes") else "", "share"),
-        make_card("SERVE", serve_skill,
-          if(is.finite(serve_total)) as.character(round(serve_total)) else "—", "SERVES",
-          serve_count_metrics,
-          if(is.finite(serve_total)) paste0(round(serve_total), " serves · ", if(is.finite(sv("Aces"))) round(sv("Aces")) else 0, " aces") else "",
-          "share", "Disruption %", "%", disruption),
-        make_card("DEFENSE", defense_skill,
-          if(is.finite(digs)) as.character(round(digs)) else "—", "DIGS",
-          c("In Play", "Kills (Converted)"),
-          if(is.finite(conversion)) paste0("Conversion ", round(conversion, 1), "% · ", if(is.finite(converted)) round(converted) else 0, " converted") else "",
-          "share", "Conversion %", "%", conversion),
-        make_card("GAPP", gapp_skill,
-          if(is.finite(gapp_pct)) paste0(round(gapp_pct, 1), "%") else "—", "GAPP %",
-          c("Total Possessions", "Attacks"),
-          gapp_footer, "none")
+          extra_bar=if(is.finite(allowed_disruption)) list(label="Allowed Disruption %", value=allowed_disruption, lower_better=TRUE) else NULL),
+        make_card("BLOCK", block_skill, if (is.finite(block_total)) as.character(round(block_total)) else "—",
+          "BLOCK EVENTS", c("Stuff", "Positive", "Error"),
+          if (is.finite(block_total)) paste0(round(block_total), " block outcomes") else ""),
+        make_card("SERVE", serve_skill, if(is.finite(serve_count)) as.character(round(serve_count)) else "—",
+          "SERVES", c("Aces", "Overpass", "OOS Pass", "Good Pass", "Serve Error"),
+          if(is.finite(serve_count)) paste0(round(serve_count), " serves · ", if(is.finite(serve_get("Aces"))) round(serve_get("Aces")) else 0, " aces") else "",
+          extra_bar=if(is.finite(disruption)) list(label="Disruption %", value=disruption, lower_better=FALSE) else NULL),
+        make_card("DEFENSE", defense_skill, if(is.finite(digs)) as.character(round(digs)) else "—",
+          "DIGS", c("In Play", "Kills (Converted)"),
+          if(is.finite(conversion)) paste0("Conversion ", round(conversion), "% · ", if(is.finite(converted)) round(converted) else 0, " converted") else "",
+          outer_ring_pct=conversion, show_legend_pct=FALSE),
+        make_card("GAPP", gapp_skill, if(is.finite(gapp_pct)) paste0(round(gapp_pct, 1), "%") else "—",
+          "GAPP %", c("Total Possessions", "Attacks"), 
+          paste0(if(is.finite(attacks)) round(attacks) else "—", " attacks / ", if(is.finite(possessions)) round(possessions) else "—", " possessions"),
+          show_legend_pct=FALSE)
       )
     )
   })
