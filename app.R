@@ -1235,33 +1235,85 @@ server <- function(input, output, session) {
   # ---------------- KEY METRICS ----------------
 
   output$key_metrics_ui <- renderUI({
-    m <- current_match()
-    req(m)
-    d <- m$key
-    if (!nrow(d)) return(div(class = "status-error", "No numeric Key Metrics were found in this workbook."))
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
 
-    # Match comparison: use the next available match in the loaded, date-sorted season list.
-    all_matches <- matches()
-    prev <- NULL
-    if (length(all_matches) > 1) {
-      idx <- which(vapply(all_matches, function(x) identical(x$file, m$file), logical(1)))
-      if (length(idx) && idx[1] < length(all_matches)) prev <- all_matches[[idx[1] + 1]]
+    # Use the most recent workbook as the template so every metric and
+    # description present in the Excel Key Metrics sheet remains visible.
+    template <- selected_matches[[1]]$key
+    if (is.null(template) || !nrow(template)) {
+      return(div(class = "status-error", "No numeric Key Metrics were found in the selected workbooks."))
     }
 
+    # Calculate the mean for each metric across all matches in the selected period.
+    # Match by metric name; skip missing/non-numeric observations.
+    metric_mean <- function(metric_name) {
+      vals <- vapply(selected_matches, function(match_data) {
+        k <- match_data$key
+        if (is.null(k) || !nrow(k)) return(NA_real_)
+        hit <- which(trimws(k$metric) == trimws(metric_name))
+        if (!length(hit)) return(NA_real_)
+        suppressWarnings(as.numeric(k$value[hit[1]]))
+      }, numeric(1))
+      if (!any(is.finite(vals))) NA_real_ else mean(vals[is.finite(vals)])
+    }
+
+    d <- template
+    d$value <- vapply(d$metric, metric_mean, numeric(1))
+    d <- d[is.finite(d$value), , drop = FALSE]
+    if (!nrow(d)) return(div(class = "status-error", "No numeric Key Metrics were found in the selected workbooks."))
+
+    # Respect the workbook's section headings first. This keeps Conversion %
+    # under Key Defensive as shown in the supplied workbook.
     category_group <- function(cat, metric) {
-      z <- tolower(paste(cat, metric))
-      if (grepl("game phase|side-out|first-ball so|point scoring", z)) return("GAME PHASE")
-      if (grepl("passing|in-system|aced", z)) return("PASSING")
-      if (grepl("offensive|attack|conversion", z)) return("KEY OFFENSIVE")
-      if (grepl("defensive|block|disruption|dig|opponent", z)) return("KEY DEFENSIVE")
-      toupper(cat)
+      c <- tolower(trimws(as.character(cat)))
+      m <- tolower(trimws(as.character(metric)))
+      if (grepl("game phase", c)) return("GAME PHASE")
+      if (grepl("passing", c)) return("PASSING")
+      if (grepl("key defensive|defensive", c)) return("KEY DEFENSIVE")
+      if (grepl("key offensive|offensive", c)) return("KEY OFFENSIVE")
+      if (grepl("game phase|side-out|first-ball so|point scoring", m)) return("GAME PHASE")
+      if (grepl("passing|in-system|aced", m)) return("PASSING")
+      if (grepl("defensive|block|disruption|dig|opponent|conversion", m)) return("KEY DEFENSIVE")
+      if (grepl("offensive|attack", m)) return("KEY OFFENSIVE")
+      toupper(as.character(cat))
     }
-    d$display_group <- mapply(category_group, d$category, d$metric, USE.NAMES = FALSE)
-    d$metric_lower_better <- grepl("aced %|opponent attack eff|error|deadball", d$metric, ignore.case = TRUE)
-    d$is_eff <- grepl("eff", d$metric, ignore.case = TRUE)
-    d$bar_value <- ifelse(d$is_eff, pmax(0, pmin(1, d$value)), pmax(0, pmin(100, ifelse(abs(d$value) <= 1 & grepl("%", d$metric), d$value * 100, d$value))))
 
-    groups <- unique(d$display_group)
+    d$display_group <- mapply(category_group, d$category, d$metric, USE.NAMES = FALSE)
+    d$metric_lower_better <- grepl("aced %|opponent attack eff|error|deadball|disruption", d$metric, ignore.case = TRUE)
+    d$is_eff <- grepl("eff", d$metric, ignore.case = TRUE)
+    d$is_pct <- grepl("%", d$metric, fixed = TRUE)
+
+    # Fixed scale: percentages 0-100%; efficiency 0-1.000.
+    d$scale_value <- ifelse(
+      d$is_eff,
+      d$value,
+      ifelse(d$is_pct & abs(d$value) <= 1, d$value * 100, d$value)
+    )
+    d$bar_value <- pmax(0, pmin(ifelse(d$is_eff, 1, 100), d$scale_value))
+
+    # Marker is the average of the matches immediately outside the selected window,
+    # when one exists. For Most Recent / Previous Match, this is the next older match.
+    all_matches <- matches()
+    selected_files <- vapply(selected_matches, function(x) x$file, character(1))
+    older <- all_matches[!vapply(all_matches, function(x) x$file %in% selected_files, logical(1))]
+    comparison_match <- if (length(older)) older else NULL
+
+    comparison_mean <- function(metric_name) {
+      if (is.null(comparison_match)) return(NA_real_)
+      vals <- vapply(comparison_match, function(match_data) {
+        k <- match_data$key
+        if (is.null(k) || !nrow(k)) return(NA_real_)
+        hit <- which(trimws(k$metric) == trimws(metric_name))
+        if (!length(hit)) return(NA_real_)
+        suppressWarnings(as.numeric(k$value[hit[1]]))
+      }, numeric(1))
+      if (!any(is.finite(vals))) NA_real_ else mean(vals[is.finite(vals)])
+    }
+
+    groups_order <- c("GAME PHASE", "PASSING", "KEY OFFENSIVE", "KEY DEFENSIVE")
+    groups <- c(groups_order[groups_order %in% d$display_group], setdiff(unique(d$display_group), groups_order))
+
     tagList(lapply(groups, function(g) {
       rows <- d[d$display_group == g, , drop = FALSE]
       div(class = "metric-group",
@@ -1270,14 +1322,11 @@ server <- function(input, output, session) {
           r <- rows[i, , drop = FALSE]
           maxval <- if (r$is_eff) 1 else 100
           width <- max(0, min(100, r$bar_value / maxval * 100))
-          val_label <- if (r$is_eff) sprintf("%.3f", r$value) else paste0(sprintf("%.1f", ifelse(abs(r$value) <= 1 & grepl("%", r$metric), r$value * 100, r$value)), "%")
-          prev_value <- NA_real_
-          if (!is.null(prev) && !is.null(prev$key) && nrow(prev$key)) {
-            hit <- prev$key[prev$key$metric == r$metric, , drop = FALSE]
-            if (nrow(hit)) prev_value <- suppressWarnings(as.numeric(hit$value[1]))
-          }
-          prev_bar <- if (is.na(prev_value)) NA_real_ else if (r$is_eff) prev_value else if (abs(prev_value) <= 1 && grepl("%", r$metric)) prev_value * 100 else prev_value
-          marker <- if (!is.na(prev_bar) && is.finite(prev_bar)) paste0("left:", max(0, min(100, prev_bar / maxval * 100)), "%") else NULL
+          val_label <- if (r$is_eff) sprintf("%.3f", r$value) else paste0(sprintf("%.1f", r$scale_value), "%")
+          cmp_value <- comparison_mean(r$metric)
+          cmp_bar <- if (is.na(cmp_value)) NA_real_ else if (r$is_eff) cmp_value else if (r$is_pct && abs(cmp_value) <= 1) cmp_value * 100 else cmp_value
+          marker <- if (!is.na(cmp_bar) && is.finite(cmp_bar)) paste0("left:", max(0, min(100, cmp_bar / maxval * 100)), "%") else NULL
+          cmp_label <- if (is.null(comparison_match)) "" else paste(vapply(comparison_match, function(x) x$opponent, character(1)), collapse = "/")
           div(class = "metric-row",
             div(class = "metric-copy",
               div(class = "metric-name", r$metric),
@@ -1286,7 +1335,7 @@ server <- function(input, output, session) {
             div(class = "metric-value", val_label),
             div(class = "metric-bar-area",
               div(class = "metric-track", div(class = paste("metric-fill", if (r$metric_lower_better) "metric-bad" else "metric-good"), style = paste0("width:", width, "%"))),
-              if (!is.null(marker)) div(class = "metric-marker-wrap", style = marker, title = paste("Previous match:", prev_value), div(class = "metric-marker"), div(class = "metric-marker-label", paste0(prev$opponent, " ", if (r$is_eff) sprintf("%.3f", prev_value) else paste0(round(prev_bar, 1), "%"))))
+              if (!is.null(marker)) div(class = "metric-marker-wrap", style = marker, title = paste("Comparison average:", cmp_value), div(class = "metric-marker"), div(class = "metric-marker-label", paste0(cmp_label, " ", if (r$is_eff) sprintf("%.3f", cmp_value) else paste0(round(cmp_bar, 1), "%"))))
             )
           )
         })
