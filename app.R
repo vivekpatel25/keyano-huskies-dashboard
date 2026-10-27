@@ -1670,7 +1670,12 @@ server <- function(input, output, session) {
     d <- attack_summary()
     validate(need(nrow(d) > 0, "No attack detail found in the selected matches."))
 
-    phase <- input$attack_phase_filter %||% "All"
+    phase <- input$attack_phase_filter
+    if (is.null(phase) || length(phase) == 0 || is.na(phase[1]) || !nzchar(as.character(phase[1]))) {
+      phase <- "All"
+    } else {
+      phase <- as.character(phase[1])
+    }
     if (identical(phase, "FB")) {
       shown <- data.frame(
         `Attack Type` = d[["Attack Type"]],
