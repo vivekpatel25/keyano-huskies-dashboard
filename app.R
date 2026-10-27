@@ -789,7 +789,7 @@ ui <- page_fluid(
       .passing-section-note { color:#718397; font-size:12px; margin:0 0 12px; }
       .passing-player-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; align-items:stretch; }
       .passing-player-card { background:#fff; border:1px solid #d8e2ec; border-radius:13px; overflow:hidden; box-shadow:0 3px 10px rgba(18,45,75,.06); min-width:0; }
-      .passing-player-header { background:#bd5700; color:#fff; padding:11px 14px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:800; }
+      .passing-player-header { background:#bd5700 !important; color:#fff !important; padding:11px 14px; display:flex; justify-content:space-between; align-items:center; gap:8px; font-weight:800; }
       .passing-player-name { font-size:15px; line-height:1.2; }
       .passing-player-meta { font-size:11px; font-weight:500; opacity:.9; white-space:nowrap; }
       .passing-player-caption { padding:9px 12px 0; color:#718397; font-size:10px; }
@@ -2168,8 +2168,11 @@ server <- function(input, output, session) {
 
   # Use the player silhouette already stored with the app's static assets.
   # If your repository uses a different filename, update this single value.
-  passing_player_image <- "Volleyball Player in Defensive Stance.png"
+  passing_player_image <- "Volleyball Player in Defensive Stance"
 
+  # Period logic: counts (Total Pass, Good Pass, Aced) are summed across selected matches;
+  # GP % and Aced % are calculated from those period totals (weighted rates, not averages of match rates).
+  # Period aggregation: counts are summed across selected matches; percentages are calculated from those totals (weighted rates, not averages of match percentages).
   passing_period_data <- reactive({
     selected_matches <- period_matches()
     req(length(selected_matches) > 0)
@@ -2255,7 +2258,7 @@ server <- function(input, output, session) {
       total_good <- sum(rows$`Good Pass`, na.rm = TRUE)
       total_aced <- sum(rows$Aced, na.rm = TRUE)
       div(class = "passing-player-card",
-        div(class = "passing-player-header",
+        div(class = "passing-player-header", style = "background-color:#bd5700 !important; color:#ffffff !important;",
           div(class = "passing-player-name", paste0("#", pl$`Player No.`, " ", pl$`Player Name`)),
           div(class = "passing-player-meta", ifelse(is.na(pl$Position) || !nzchar(pl$Position), "", pl$Position))
         ),
@@ -2264,7 +2267,7 @@ server <- function(input, output, session) {
           point_ui(rows, "Overhand", "passing-overhand"),
           point_ui(rows, "His Left", "passing-left"),
           div(class = "passing-player-figure",
-            tags$img(src = passing_player_image, alt = "Volleyball player silhouette"),
+            tags$img(src = URLencode(passing_player_image, reserved = TRUE), alt = "Volleyball player silhouette"),
             point_ui(rows, "On body", "passing-body-point")
           ),
           point_ui(rows, "His Right", "passing-right"),
