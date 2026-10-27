@@ -1125,13 +1125,16 @@ server <- function(input, output, session) {
         ),
 
         div(
-          class = "chart-card",
-          plotOutput("attack_plot", height = 320)
+          class = "chart-card table-wrap",
+          tableOutput("attack_table")
         ),
 
         div(
-          class = "chart-card table-wrap",
-          tableOutput("attack_table")
+          class = "chart-card attack-type-detail",
+          h3("ATTACK TYPE BREAKDOWN"),
+          p(class = "section-intro", "Select an attack type to compare first-ball, transition and combined efficiency for the selected match period."),
+          uiOutput("attack_type_selector"),
+          plotOutput("attack_efficiency_plot", height = 220)
         )
       ),
 
@@ -1568,65 +1571,116 @@ server <- function(input, output, session) {
 
   # ---------------- ATTACK DETAIL ----------------
 
-  output$attack_plot <- renderPlot({
+  # Prepare attack rows from every workbook in the selected period. Counts are
+  # summed by attack type and previous-play phase; efficiencies are recalculated
+  # from the pooled counts rather than averaging match-level efficiencies.
+  attack_period_data <- reactive({
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
 
-    m <- current_match()
-    req(m)
+    pieces <- lapply(selected_matches, function(mm) {
+      d <- mm$attack
+      if (is.null(d) || !nrow(d) || !("Attack Type" %in% names(d))) return(NULL)
+      d <- as.data.frame(d, stringsAsFactors = FALSE)
+      d[["Attack Type"]] <- trimws(as.character(d[["Attack Type"]]))
+      if ("Previous Play" %in% names(d)) {
+        d[["Previous Play"]] <- trimws(as.character(d[["Previous Play"]]))
+      } else {
+        d[["Previous Play"]] <- "FB"
+      }
+      # Workbook continuation rows leave Attack Type blank; carry the label down.
+      d[["Attack Type"]][d[["Attack Type"]] == ""] <- NA_character_
+      d[["Attack Type"]] <- tidyr::fill(tibble::tibble(x = d[["Attack Type"]]), x, .direction = "down")$x
+      for (nm in c("Attempts", "Kills", "Error")) {
+        if (!nm %in% names(d)) d[[nm]] <- 0
+        d[[nm]] <- suppressWarnings(as.numeric(d[[nm]]))
+        d[[nm]][!is.finite(d[[nm]])] <- 0
+      }
+      d <- d[!is.na(d[["Attack Type"]]) & nzchar(d[["Attack Type"]]), , drop = FALSE]
+      d
+    })
+    d <- dplyr::bind_rows(pieces)
+    if (!nrow(d)) return(data.frame())
+    d[["Previous Play"]][tolower(d[["Previous Play"]]) %in% c("first ball", "first-ball", "firstball")] <- "FB"
+    d[["Previous Play"]][tolower(d[["Previous Play"]]) %in% c("trans", "transition attack")] <- "Transition"
+    d
+  })
 
-    d <- m$attack
+  attack_eff <- function(kills, errors, attempts) {
+    ifelse(is.finite(attempts) & attempts > 0, (kills - errors) / attempts, NA_real_)
+  }
 
-    validate(
-      need(
-        all(c("Attack Type", "Attempts") %in% names(d)),
-        "Attack columns are missing."
+  attack_summary <- reactive({
+    d <- attack_period_data()
+    if (!nrow(d)) return(data.frame())
+    types <- unique(d[["Attack Type"]])
+    rows <- lapply(types, function(tp) {
+      z <- d[d[["Attack Type"]] == tp, , drop = FALSE]
+      fb <- z[tolower(z[["Previous Play"]]) %in% c("fb", "first ball", "first-ball", "firstball"), , drop = FALSE]
+      tr <- z[tolower(z[["Previous Play"]]) %in% c("transition", "trans", "transition attack"), , drop = FALSE]
+      sumcol <- function(dat, col) sum(dat[[col]], na.rm = TRUE)
+      fb_a <- sumcol(fb, "Attempts"); fb_k <- sumcol(fb, "Kills"); fb_e <- sumcol(fb, "Error")
+      tr_a <- sumcol(tr, "Attempts"); tr_k <- sumcol(tr, "Kills"); tr_e <- sumcol(tr, "Error")
+      all_a <- fb_a + tr_a; all_k <- fb_k + tr_k; all_e <- fb_e + tr_e
+      data.frame(
+        `Attack Type` = tp,
+        Attempts = all_a,
+        Kills = all_k,
+        Errors = all_e,
+        `FB Eff.` = attack_eff(fb_k, fb_e, fb_a),
+        `Transition Eff.` = attack_eff(tr_k, tr_e, tr_a),
+        `Total Eff.` = attack_eff(all_k, all_e, all_a),
+        check.names = FALSE
       )
-    )
-
-    d <- d |>
-      filter(
-        !is.na(Attempts),
-        Attempts > 0
-      )
-
-    validate(
-      need(nrow(d) > 0, "No attack attempts found.")
-    )
-
-    if (!"Previous Play" %in% names(d)) {
-      d$`Previous Play` <- "All"
-    }
-
-    ggplot(
-      d,
-      aes(
-        x = `Attack Type`,
-        y = Attempts,
-        fill = `Previous Play`
-      )
-    ) +
-      geom_col(position = "dodge") +
-      labs(
-        x = NULL,
-        y = "Attempts",
-        fill = NULL
-      ) +
-      theme_minimal(base_size = 12) +
-      theme(
-        axis.text.x = element_text(
-          angle = 30,
-          hjust = 1
-        )
-      )
+    })
+    out <- dplyr::bind_rows(rows)
+    out[order(match(out[["Attack Type"]], types)), , drop = FALSE]
   })
 
   output$attack_table <- renderTable({
+    d <- attack_summary()
+    validate(need(nrow(d) > 0, "No attack detail found in the selected matches."))
+    d$Attempts <- round(d$Attempts, 0)
+    d$Kills <- round(d$Kills, 0)
+    d$Errors <- round(d$Errors, 0)
+    for (nm in c("FB Eff.", "Transition Eff.", "Total Eff.")) {
+      d[[nm]] <- ifelse(is.finite(d[[nm]]), sprintf("%.3f", d[[nm]]), "—")
+    }
+    d
+  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s", align = "lrrrrrr")
 
-    m <- current_match()
-    req(m)
+  output$attack_type_selector <- renderUI({
+    d <- attack_summary()
+    types <- if (nrow(d)) as.character(d[["Attack Type"]]) else character()
+    selectInput("attack_type_selected", "Attack type", choices = types,
+                selected = if (length(types)) types[1] else NULL, width = "320px")
+  })
 
-    m$attack
-
-  }, striped = TRUE, bordered = FALSE, spacing = "s")
+  output$attack_efficiency_plot <- renderPlot({
+    d <- attack_summary()
+    req(nrow(d) > 0, input$attack_type_selected)
+    selected <- d[d[["Attack Type"]] == input$attack_type_selected, , drop = FALSE]
+    validate(need(nrow(selected) > 0, "Select an attack type."))
+    vals <- data.frame(
+      Phase = factor(c("First Ball", "Transition", "Total"), levels = c("First Ball", "Transition", "Total")),
+      Efficiency = as.numeric(unlist(selected[1, c("FB Eff.", "Transition Eff.", "Total Eff.")], use.names = FALSE))
+    )
+    vals <- vals[is.finite(vals$Efficiency), , drop = FALSE]
+    validate(need(nrow(vals) > 0, "No efficiency values are available for this attack type."))
+    ggplot(vals, aes(x = Efficiency, y = Phase, fill = Phase)) +
+      geom_vline(xintercept = 0, colour = "#AAB7C4", linewidth = 0.6) +
+      geom_col(width = 0.48, show.legend = FALSE) +
+      geom_text(aes(label = sprintf("%.3f", Efficiency)),
+                hjust = ifelse(vals$Efficiency >= 0, -0.18, 1.18), size = 4, colour = "#17324D") +
+      scale_fill_manual(values = c("First Ball" = "#2F78B7", "Transition" = "#75A9D6", "Total" = "#174F86")) +
+      scale_x_continuous(limits = c(min(-0.1, min(vals$Efficiency) - 0.08), max(1.05, max(vals$Efficiency) + 0.12)),
+                         labels = function(x) sprintf("%.2f", x)) +
+      labs(x = "Attack Efficiency  (Kills − Errors) / Attempts", y = NULL) +
+      theme_minimal(base_size = 12) +
+      theme(panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(),
+            axis.text.y = element_text(face = "bold", colour = "#17324D"),
+            plot.margin = margin(10, 30, 10, 10))
+  })
 
   # ---------------- ROTATION DETAILS ----------------
 
