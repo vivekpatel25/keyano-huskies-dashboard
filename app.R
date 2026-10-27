@@ -183,15 +183,29 @@ if (is.na(match_date)) {
       col_names = FALSE
     )
 
-    key <- tibble(
-      metric = trimws(as.character(km[[2]])),
-      value = km[[3]]
-    ) |>
-      filter(
-        !is.na(metric),
-        metric != "",
-        !is.na(value)
+    # Preserve the workbook's metric labels, values, and italic description rows.
+    key_rows <- which(
+      !is.na(km[[2]]) & trimws(as.character(km[[2]])) != "" &
+        !is.na(km[[3]])
+    )
+
+    key <- lapply(key_rows, function(i) {
+      description <- ""
+      if (i < nrow(km)) {
+        next_label <- km[[2]][i + 1]
+        next_value <- km[[3]][i + 1]
+        if (!is.na(next_label) && trimws(as.character(next_label)) != "" && is.na(next_value)) {
+          description <- trimws(as.character(next_label))
+        }
+      }
+      tibble(
+        metric = trimws(as.character(km[[2]][i])),
+        value = km[[3]][i],
+        description = description
       )
+    }) |>
+      bind_rows() |>
+      filter(!is.na(metric), metric != "", !is.na(value))
 
     # By Skill
     bs <- read_excel(
@@ -575,7 +589,7 @@ server <- function(input, output, session) {
           metric_card("Matches in View",as.character(selected_n),"Selected period"),
           metric_card("Match Date",date_label,"Most recent selected match")
         ),
-        div(class="panel",h3("Key Metrics · Match vs Selected-Period Average"),p(class="section-intro","Benchmark bars compare the selected match with the average of the matches in the selected period. Only matching metrics with numeric values are shown."),plotOutput("benchmark_plot",height=320),div(class="table-wrap",tableOutput("key_table")))
+        div(class="panel",h3("KEY METRICS · PERFORMANCE PROFILE"),p(class="section-intro","Each bar uses a fixed scale: 100% for percentage metrics and 1.000 for efficiency metrics. Excel descriptions are shown below each metric; the red marker compares the previous available match when one exists."),plotOutput("benchmark_plot",height=320),div(class="table-wrap",tableOutput("key_table")))
       ),
       # 2. By skill
       div(class="analytics-section",section_title("BY SKILL","Skill-specific cards preserve the workbook's skill labels and show the recorded metrics for the selected match."),
@@ -609,23 +623,50 @@ server <- function(input, output, session) {
   }, striped=TRUE,bordered=FALSE,hover=TRUE,spacing="s")
 
   # ---------------- OVERVIEW / KEY METRICS ----------------
-  output$key_table <- renderTable({ m <- current_match(); req(m); m$key |> rename(Metric=metric,Value=value) }, striped=TRUE,bordered=FALSE,spacing="s")
+  output$key_table <- renderTable({
+    m <- current_match(); req(m)
+    m$key |> transmute(Metric=metric, Description=description, Value=vapply(seq_len(n()), function(i) fmt_value(metric[i], value[i]), character(1)))
+  }, striped=TRUE,bordered=FALSE,spacing="s")
+
   output$benchmark_plot <- renderPlot({
     ms <- period_matches(); m <- current_match(); req(m)
-    focus <- c("Attack Efficiency","Side-Out %")
-    d <- bind_rows(lapply(focus,function(nm) {
-      vals <- vapply(ms,function(z) metric_value(z,nm),numeric(1))
-      vals <- vals[is.finite(vals)]
-      cur <- metric_value(m,nm)
-      if (!is.finite(cur) || !length(vals)) return(NULL)
-      data.frame(Metric=nm,Group=c("Selected match","Period average"),Value=c(cur,mean(vals,na.rm=TRUE)))
-    }))
-    validate(need(nrow(d)>0,"Attack Efficiency and Side-Out % numeric values were not found in Key Metrics."))
-    d$Group <- factor(d$Group,levels=c("Selected match","Period average"))
-    ggplot(d,aes(x=Metric,y=Value,fill=Group))+geom_col(position=position_dodge(width=.72),width=.62)+
-      scale_fill_manual(values=c("Selected match"="#2F75B5","Period average"="#AAB8C7"))+labs(x=NULL,y="Workbook value",fill=NULL)+
-      theme_minimal(base_size=12)+theme(legend.position="top",panel.grid.major.x=element_blank(),axis.text=element_text(colour="#172B43"))
-  })
+    d <- m$key |> mutate(
+      raw_value = safe_numeric(value),
+      is_efficiency = grepl("efficiency|\\beff\\b|atk eff", metric, ignore.case=TRUE),
+      is_percent = grepl("%", metric, fixed=TRUE) | grepl("side.?out|aced|in.?system|point scoring|conversion|block impact|disruption|dig|serve.?in|positive pass|good pass", metric, ignore.case=TRUE),
+      bar_value = ifelse(is_efficiency, raw_value * 100,
+                         ifelse(is_percent & abs(raw_value) <= 1, raw_value * 100, raw_value)),
+      bar_max = 100,
+      direction = ifelse(grepl("aced|error|deadball", metric, ignore.case=TRUE), "Lower is better", "Higher is better"),
+      display_value = vapply(seq_len(n()), function(i) fmt_value(metric[i], raw_value[i]), character(1)),
+      description = ifelse(is.na(description), "", description)
+    ) |> filter(is.finite(bar_value))
+    validate(need(nrow(d)>0, "No numeric Key Metrics were found in this workbook."))
+    # The second most recent available match is the comparison marker when present.
+    comparison <- if (length(ms) >= 2) ms[[2]] else NULL
+    d$comparison_value <- NA_real_
+    d$comparison_label <- ""
+    if (!is.null(comparison)) {
+      for (i in seq_len(nrow(d))) {
+        other <- metric_value(comparison, d$metric[i])
+        if (is.finite(other)) {
+          other_is_eff <- d$is_efficiency[i]
+          other_is_pct <- d$is_percent[i]
+          d$comparison_value[i] <- if (other_is_eff) other * 100 else if (other_is_pct && abs(other) <= 1) other * 100 else other
+        }
+      }
+      d$comparison_label <- comparison$opponent
+    }
+    d$metric_label <- factor(ifelse(nzchar(d$description), paste0(d$metric, "\n", d$description), d$metric), levels=rev(ifelse(nzchar(d$description), paste0(d$metric, "\n", d$description), d$metric)))
+    ggplot(d, aes(y=metric_label)) +
+      geom_segment(aes(x=0, xend=100, yend=metric_label), linewidth=7, colour="#F3EAE2", lineend="round") +
+      geom_segment(aes(x=0, xend=pmax(0,pmin(100,bar_value)), yend=metric_label, colour=direction), linewidth=7, lineend="round") +
+      geom_segment(data=d |> filter(is.finite(comparison_value)), aes(x=comparison_value, xend=comparison_value, y=as.numeric(metric_label)-0.28, yend=as.numeric(metric_label)+0.28), inherit.aes=FALSE, colour="#E74C3C", linewidth=1.1) +
+      scale_x_continuous(limits=c(0,100), breaks=c(0,25,50,75,100), labels=c("0","25","50","75","100%"), expand=expansion(mult=c(0,0))) +
+      scale_colour_manual(values=c("Higher is better"="#159B68", "Lower is better"="#DF4B3F"), guide="none") +
+      labs(x=NULL,y=NULL,caption=if (length(ms)>=2) paste("Red marker:", comparison$opponent, "(previous available match)") else "Bar scale: 100% for percentage metrics; 1.000 for efficiency metrics.") +
+      theme_minimal(base_size=12) + theme(panel.grid.major.y=element_blank(), panel.grid.minor=element_blank(), axis.text.y=element_text(face="bold",colour="#172B43"), axis.text.x=element_text(colour="#65758A"), plot.caption=element_text(colour="#65758A",hjust=0), plot.margin=margin(12,18,12,12))
+  }, res=100)
 
   # ---------------- BY SKILL CARDS ----------------
   output$skill_cards <- renderUI({
