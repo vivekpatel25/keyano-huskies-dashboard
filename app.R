@@ -343,14 +343,16 @@ if (is.na(match_date)) {
       dat
     }
 
-    rotation_setting <- setting_raw[1:8, 1:4]
-
-    names(rotation_setting) <- c(
-      "Rotation",
-      "Sets",
-      "Kills",
-      "Attacks"
-    )
+    # Setting totals: row 1 is the worksheet header, rows 2:7 are
+    # Ro1-Ro6, and row 8 is the total. Keep only the requested count columns.
+    rotation_setting <- setting_raw[2:8, 1:3]
+    names(rotation_setting) <- c("Rotation", "Sets", "Kills")
+    rotation_setting <- as_tibble(rotation_setting) |>
+      mutate(
+        Rotation = trimws(as.character(Rotation)),
+        Sets = suppressWarnings(as.numeric(Sets)),
+        Kills = suppressWarnings(as.numeric(Kills))
+      )
 
     fb_sets <- read_setting_block(
       header_row = 10,
@@ -1274,36 +1276,40 @@ server <- function(input, output, session) {
           "Rotation distribution and who sets on first-ball and transition."
         ),
 
+        tags$style(HTML("
+          .setting-stats-card { width:100%; max-width:none; box-sizing:border-box; }
+          .setting-stats-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+          .setting-stats-heading h4 { margin:0 0 12px 0; }
+          .setting-setter-label { margin:0 0 12px auto; color:#60788d; font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; }
+          .setting-stats-card table { width:100% !important; }
+          .setting-stats-card .table-responsive { width:100%; }
+          .setting-stats-card th, .setting-stats-card td { white-space:nowrap; }
+        ")),
+
         div(
-          class = "chart-card",
-
-          h4("Rotation setting totals"),
-
+          class = "chart-card table-wrap setting-stats-card",
+          div(
+            class = "setting-stats-heading",
+            h4("Rotation setting totals"),
+            div(class = "setting-setter-label", "Setter · Kai Rosenau")
+          ),
           tableOutput("rotation_setting_table")
         ),
 
         fluidRow(
-
           column(
             6,
-
             div(
-              class = "chart-card",
-
+              class = "chart-card table-wrap setting-stats-card",
               h4("Who Sets · First Ball"),
-
               tableOutput("fb_table")
             )
           ),
-
           column(
             6,
-
             div(
-              class = "chart-card",
-
+              class = "chart-card table-wrap setting-stats-card",
               h4("Who Sets · Transition"),
-
               tableOutput("trans_table")
             )
           )
@@ -2008,27 +2014,48 @@ server <- function(input, output, session) {
     m <- current_match()
     req(m)
 
-    m$rotation_setting
+    d <- m$rotation_setting
+    validate(need(!is.null(d) && nrow(d) > 0, "No rotation setting totals found."))
+    # Remove any legacy Attacks column if present.
+    d <- d[, intersect(c("Rotation", "Sets", "Kills"), names(d)), drop = FALSE]
+    d
 
-  }, striped = TRUE, bordered = FALSE, spacing = "s")
+  }, striped = TRUE, bordered = FALSE, spacing = "s", digits = 0, width = "100%")
+
+  format_setting_table <- function(d) {
+    if (is.null(d) || !nrow(d)) return(d)
+    d <- as.data.frame(d, check.names = FALSE)
+    for (nm in names(d)) {
+      values <- suppressWarnings(as.numeric(as.character(d[[nm]])))
+      if (!all(is.na(values))) {
+        nml <- tolower(trimws(nm))
+        if (grepl("share", nml) || nml %in% c("k%", "e%") || grepl("percent|pct|%", nml)) {
+          d[[nm]] <- ifelse(is.na(values), "–", paste0(sprintf("%.1f", values * ifelse(max(abs(values), na.rm = TRUE) <= 1, 100, 1)), "%"))
+        } else if (grepl("eff", nml)) {
+          d[[nm]] <- ifelse(is.na(values), "–", sprintf("%.3f", values))
+        } else if (grepl("sets|kills|errors", nml)) {
+          d[[nm]] <- ifelse(is.na(values), "–", sprintf("%.0f", values))
+        }
+      }
+    }
+    d
+  }
 
   output$fb_table <- renderTable({
 
     m <- current_match()
     req(m)
+    format_setting_table(m$fb_sets)
 
-    m$fb_sets
-
-  }, striped = TRUE, bordered = FALSE, spacing = "s")
+  }, striped = TRUE, bordered = FALSE, spacing = "s", width = "100%")
 
   output$trans_table <- renderTable({
 
     m <- current_match()
     req(m)
+    format_setting_table(m$trans_sets)
 
-    m$trans_sets
-
-  }, striped = TRUE, bordered = FALSE, spacing = "s")
+  }, striped = TRUE, bordered = FALSE, spacing = "s", width = "100%")
 
   # ---------------- PASSING BY CONTACT POINT ----------------
 
