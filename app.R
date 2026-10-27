@@ -1824,84 +1824,57 @@ server <- function(input, output, session) {
 
   output$rotation_plot <- renderPlot({
 
-    m <- current_match()
-    req(m)
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
 
-    d <- m$rotation
+    # Aggregate across the selected period: average rate metrics by rotation.
+    rotation_list <- lapply(selected_matches, function(mm) {
+      if (is.null(mm$rotation) || !nrow(mm$rotation)) return(NULL)
+      mm$rotation
+    })
+    rotation_list <- Filter(Negate(is.null), rotation_list)
+    validate(need(length(rotation_list) > 0, "No rotation details are available."))
 
-    validate(
-      need(
-        "Rotation" %in% names(d),
-        "Rotation column is missing."
-      )
-    )
+    all_rotation <- bind_rows(rotation_list)
+    validate(need("Rotation" %in% names(all_rotation), "Rotation column is missing."))
+    rate_cols <- intersect(c("SO%", "PS%", "Serve In %"), names(all_rotation))
+    validate(need(length(rate_cols) > 0, "No rotation rate columns found."))
 
-    cols <- intersect(
-      c("SO%", "PS%", "Serve In %"),
-      names(d)
-    )
+    for (nm in rate_cols) all_rotation[[nm]] <- suppressWarnings(as.numeric(all_rotation[[nm]]))
+    all_rotation <- all_rotation |>
+      filter(grepl("^Ro[1-6]$", as.character(Rotation))) |>
+      group_by(Rotation) |>
+      summarise(across(all_of(rate_cols), ~ {
+        vals <- .x[is.finite(.x)]
+        if (length(vals)) mean(vals) else NA_real_
+      }), .groups = "drop")
 
-    validate(
-      need(
-        length(cols) > 0,
-        "No rotation rate columns found."
-      )
-    )
+    long <- all_rotation |>
+      pivot_longer(-Rotation, names_to = "Metric", values_to = "Value") |>
+      filter(is.finite(Value))
+    validate(need(nrow(long) > 0, "No rotation values found."))
 
-    long <- d |>
-      select(
-        Rotation,
-        all_of(cols)
-      ) |>
-      pivot_longer(
-        -Rotation,
-        names_to = "Metric",
-        values_to = "Value"
-      ) |>
-      mutate(
-        Value = suppressWarnings(
-          as.numeric(Value)
-        )
-      ) |>
-      filter(!is.na(Value))
-
-    validate(
-      need(
-        nrow(long) > 0,
-        "No rotation values found."
-      )
-    )
-
-    ggplot(
-      long,
-      aes(
-        x = Rotation,
-        y = Value,
-        fill = Metric
-      )
-    ) +
+    ggplot(long, aes(x = Rotation, y = Value, fill = Metric)) +
       geom_col(position = "dodge") +
-      scale_y_continuous(
-        labels = scales::percent_format(accuracy = 1)
-      ) +
-      labs(
-        x = NULL,
-        y = "Rate",
-        fill = NULL
-      ) +
+      scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+      labs(x = NULL, y = "Rate", fill = NULL) +
       theme_minimal(base_size = 12) +
-      theme(
-        legend.position = "bottom"
-      )
+      theme(legend.position = "bottom")
   })
 
   output$rotation_table <- renderUI({
 
-    m <- current_match()
-    req(m)
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
 
-    d <- m$rotation
-    validate(need(is.data.frame(d) && nrow(d) > 0, "No rotation details are available."))
+    rotation_list <- lapply(selected_matches, function(mm) {
+      if (is.null(mm$rotation) || !nrow(mm$rotation)) return(NULL)
+      mm$rotation
+    })
+    rotation_list <- Filter(Negate(is.null), rotation_list)
+    validate(need(length(rotation_list) > 0, "No rotation details are available."))
+    all_rotation <- bind_rows(rotation_list)
+    validate(need("Rotation" %in% names(all_rotation), "Rotation column is missing."))
 
     # Group headings mirror the Rotation Details worksheet.
     groups <- list(
@@ -1914,14 +1887,28 @@ server <- function(input, output, session) {
     cols <- ordered_cols[ordered_cols %in% names(d)]
     validate(need("Rotation" %in% cols, "Rotation column is missing."))
 
-    d <- d[, cols, drop = FALSE]
-    for (nm in setdiff(names(d), "Rotation")) {
-      d[[nm]] <- suppressWarnings(as.numeric(d[[nm]]))
+    all_rotation <- all_rotation[, cols, drop = FALSE]
+    for (nm in setdiff(names(all_rotation), "Rotation")) {
+      all_rotation[[nm]] <- suppressWarnings(as.numeric(all_rotation[[nm]]))
     }
+
+    # Across Last 5 / Last 10 / Full Season, combine each rotation across matches:
+    # average rate metrics, sum count metrics. Then calculate the AVG row below.
+    average_metrics <- c("SO%", "PS%", "Serve In %")
+    metric_cols <- setdiff(names(all_rotation), "Rotation")
+    d <- all_rotation |>
+      filter(grepl("^Ro[1-6]$", as.character(Rotation))) |>
+      group_by(Rotation) |>
+      summarise(across(all_of(metric_cols), ~ {
+        vals <- .x[is.finite(.x)]
+        if (!length(vals)) NA_real_
+        else if (dplyr::cur_column() %in% average_metrics) mean(vals)
+        else sum(vals)
+      }), .groups = "drop") |>
+      arrange(match(Rotation, paste0("Ro", 1:6)))
 
     # AVG row: average the three rate metrics requested; sum all other metrics.
     metric_cols <- setdiff(names(d), "Rotation")
-    average_metrics <- c("SO%", "PS%", "Serve In %")
     avg <- as.list(rep(NA_real_, length(names(d))))
     names(avg) <- names(d)
     avg$Rotation <- "AVG"
