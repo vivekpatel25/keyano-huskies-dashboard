@@ -440,7 +440,8 @@ load_matches <- function() {
   )
 
   files <- files[
-    !grepl("^~\\$", basename(files))
+    !grepl("^~\\$", basename(files)) &
+      !grepl("-Athlete\\.xlsx$", basename(files), ignore.case = TRUE)
   ]
 
   if (!length(files)) {
@@ -601,6 +602,24 @@ ui <- page_fluid(
         max-width: none !important;
         box-sizing: border-box;
       }
+      /* Full-width searchable athlete roster and profile */
+      .athlete-roster-wrap, .athlete-profile-wrap { width:100%; max-width:none; box-sizing:border-box; }
+      .athlete-roster-table { width:100%; border-collapse:collapse; background:#fff; }
+      .athlete-roster-table th { text-align:left; color:#17324d; font-weight:800; border-bottom:2px solid #17324d; padding:12px 14px; }
+      .athlete-roster-table td { padding:10px 14px; border-bottom:1px solid #e7edf2; vertical-align:middle; }
+      .athlete-roster-table tr:nth-child(even) td { background:#f2f5f7; }
+      .athlete-open-link { border:0; background:transparent; color:#2F75B5; font-weight:800; padding:0; text-decoration:none; }
+      .athlete-open-link:hover { text-decoration:underline; color:#17466B; }
+      .athlete-profile-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:16px; }
+      .athlete-profile-title { margin:0; color:#17324d; }
+      .athlete-profile-subtitle { color:#6b8194; margin-top:4px; }
+      .athlete-profile-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+      .athlete-profile-card { background:#fff; border:1px solid #d8e2ec; border-radius:12px; padding:16px; min-width:0; box-shadow:0 3px 10px rgba(18,45,75,.04); }
+      .athlete-profile-card h3 { margin:0 0 12px; font-size:18px; color:#17324d; }
+      .athlete-profile-card table { width:100% !important; }
+      .athlete-profile-card .table-responsive { width:100%; }
+      .athlete-profile-wide { grid-column:1 / -1; }
+      @media(max-width:800px) { .athlete-profile-grid { grid-template-columns:1fr; } .athlete-profile-wide { grid-column:auto; } }
 
       /* Let Attack Detail use the full content area, not the table's natural width. */
       .analytics-section,
@@ -906,7 +925,7 @@ ui <- page_fluid(
 
   div(
     class = "footer-note",
-    "Keyano Huskies · ACAC · 2026–27 | Internal performance analysis | Post match Report"
+    "Keyano Huskies · ACAC · 2026–27 | Internal performance analysis"
   )
 )
 
@@ -919,6 +938,7 @@ server <- function(input, output, session) {
   )
 
   show_athletes <- reactiveVal(FALSE)
+  selected_athlete <- reactiveVal(NULL)
 
   matches <- reactive({
 
@@ -1056,6 +1076,7 @@ server <- function(input, output, session) {
         {
           selected_period(this_period)
           show_athletes(FALSE)
+          selected_athlete(NULL)
         }
       )
     })
@@ -1064,34 +1085,39 @@ server <- function(input, output, session) {
   observeEvent(
     input$athletes_nav,
     {
-      show_athletes(!show_athletes())
+      if (show_athletes()) {
+        show_athletes(FALSE)
+        selected_athlete(NULL)
+      } else {
+        show_athletes(TRUE)
+        selected_athlete(NULL)
+      }
     }
   )
+
+  observeEvent(input$athlete_back, {
+    selected_athlete(NULL)
+  })
 
   # ---------------- PAGE CONTENT ----------------
 
   output$page_content <- renderUI({
 
-    # Athletes view
-    if (show_athletes()) {
+    # Individual athlete profile takes priority while the Athletes area is open.
+    if (show_athletes() && !is.null(selected_athlete())) {
+      return(uiOutput("athlete_profile_ui"))
+    }
 
+    # Full-width searchable roster
+    if (show_athletes()) {
       return(
         tagList(
-
-          h2("Athletes"),
-
-          p(
-            class = "section-intro",
-            "Season roster. Public-facing names use first names only."
-          ),
-
-          textInput(
-            "athlete_search",
-            "Search athletes",
-            placeholder = "First name, jersey number, or position..."
-          ),
-
-          tableOutput("roster_table")
+          div(class = "athlete-roster-wrap",
+            h2("Athletes"),
+            p(class = "section-intro", "Season roster. Public-facing names use first names only. Select a player to open their individual performance profile."),
+            textInput("athlete_search", "Search athletes", placeholder = "First name, jersey number, or position...", width = "100%"),
+            uiOutput("roster_table_ui")
+          )
         )
       )
     }
@@ -1376,29 +1402,314 @@ server <- function(input, output, session) {
 
   # ---------------- ATHLETES TABLE ----------------
 
-  output$roster_table <- renderTable({
+  athlete_button_id <- function(jersey, first_name) {
+    paste0("athlete_open_", gsub("[^A-Za-z0-9]", "", paste(jersey, first_name, sep = "_")))
+  }
 
-    search <- if (is.null(input$athlete_search)) {
-      ""
-    } else {
-      tolower(input$athlete_search)
+  # Each roster row has a real Shiny action control so selecting a name opens its profile.
+  output$roster_table_ui <- renderUI({
+    search <- if (is.null(input$athlete_search)) "" else tolower(input$athlete_search)
+    shown <- roster |>
+      filter(grepl(search, tolower(paste(FirstName, Jersey, Position)))) |>
+      arrange(suppressWarnings(as.numeric(Jersey)))
+
+    if (!nrow(shown)) return(div(class = "placeholder-panel", "No athletes match that search."))
+
+    tags$div(class = "table-responsive",
+      tags$table(class = "athlete-roster-table",
+        tags$thead(tags$tr(tags$th("Jersey #"), tags$th("First Name"), tags$th("Position"))),
+        tags$tbody(lapply(seq_len(nrow(shown)), function(i) {
+          player <- shown[i, , drop = FALSE]
+          id <- athlete_button_id(player$Jersey[[1]], player$FirstName[[1]])
+          tags$tr(
+            tags$td(player$Jersey[[1]]),
+            tags$td(actionLink(id, label = player$FirstName[[1]], class = "athlete-open-link")),
+            tags$td(player$Position[[1]])
+          )
+        }))
+      )
+    )
+  })
+
+  # Register profile-open events for the season roster.
+  if (nrow(roster)) {
+    for (i in seq_len(nrow(roster))) {
+      local({
+        player_name <- as.character(roster$FirstName[i])
+        player_jersey <- as.character(roster$Jersey[i])
+        this_id <- athlete_button_id(player_jersey, player_name)
+        observeEvent(input[[this_id]], {
+          selected_athlete(list(name = player_name, jersey = player_jersey,
+                                position = as.character(roster$Position[match(player_jersey, roster$Jersey)])))
+          show_athletes(TRUE)
+        }, ignoreInit = TRUE)
+      })
     }
+  }
 
-    roster |>
-      filter(
-        grepl(
-          search,
-          tolower(
-            paste(FirstName, Jersey, Position)
+  # Read the per-match athlete workbook paired with each main match workbook.
+  athlete_match_data <- reactive({
+    ms <- matches()
+    if (!length(ms)) return(list())
+    lapply(ms, function(m) {
+      athlete_file <- sub("\\.xlsx$", "-Athlete.xlsx", basename(m$file), ignore.case = TRUE)
+      athlete_path <- file.path(match_dir, athlete_file)
+      # Also accept files uploaded directly into data/ to remain compatible with earlier folder guidance.
+      if (!file.exists(athlete_path)) athlete_path <- file.path("data", athlete_file)
+      if (!file.exists(athlete_path)) return(list(file = athlete_file, date = m$date, opponent = m$opponent, attack = tibble(), setting = tibble(), dump = tibble(), exists = FALSE))
+
+      raw_attack <- tryCatch(read_excel(athlete_path, sheet = "Attack"), error = function(e) tibble())
+      if (nrow(raw_attack) && all(c("Player Name", "Attack Type") %in% names(raw_attack))) {
+        raw_attack <- raw_attack |>
+          fill(`Player Name`, `Attack Type`, .direction = "down") |>
+          filter(!is.na(`Attack Attempts`))
+      }
+      for (nm in intersect(c("Attack Attempts", "Kills", "Stuffed Attacks", "Error", "Eff."), names(raw_attack))) raw_attack[[nm]] <- suppressWarnings(as.numeric(raw_attack[[nm]]))
+      if (nrow(raw_attack)) {
+        raw_attack <- raw_attack |>
+          mutate(`Player Name` = trimws(as.character(`Player Name`)),
+                 `Attack Type` = as.character(`Attack Type`),
+                 date = m$date, opponent = m$opponent, match_file = m$file)
+      }
+
+      raw_setter <- tryCatch(read_excel(athlete_path, sheet = "Setter", col_names = FALSE), error = function(e) tibble())
+      setting <- tibble()
+      dump <- tibble()
+      if (nrow(raw_setter) >= 2) {
+        setting_header <- trimws(as.character(unlist(raw_setter[1, ], use.names = FALSE)))
+        setting_header[is.na(setting_header) | setting_header == ""] <- paste0("X", which(is.na(setting_header) | setting_header == ""))
+        setting_row <- which(!is.na(raw_setter[[1]]) & trimws(as.character(raw_setter[[1]])) != "" & trimws(as.character(raw_setter[[1]])) != "Player Name")[1]
+        if (length(setting_row) && !is.na(setting_row)) {
+          setting <- as_tibble(raw_setter[setting_row, seq_len(min(7, ncol(raw_setter)))])
+          names(setting) <- setting_header[seq_len(ncol(setting))]
+          setting <- setting |>
+            mutate(`Player Name` = trimws(as.character(`Player Name`)), date = m$date, opponent = m$opponent, match_file = m$file)
+        }
+        dump_header_row <- which(vapply(seq_len(nrow(raw_setter)), function(r) any(trimws(as.character(unlist(raw_setter[r, ], use.names = FALSE))) == "Attempts", na.rm = TRUE), logical(1)))[1]
+        if (length(dump_header_row) && !is.na(dump_header_row) && dump_header_row < nrow(raw_setter)) {
+          dump_header <- trimws(as.character(unlist(raw_setter[dump_header_row, ], use.names = FALSE)))
+          dump_header <- dump_header[seq_len(min(6, ncol(raw_setter)))]
+          dump_row <- dump_header_row + 1
+          if (!is.na(raw_setter[[1]][dump_row]) && trimws(as.character(raw_setter[[1]][dump_row])) != "") {
+            dump <- as_tibble(raw_setter[dump_row, seq_len(length(dump_header))])
+            names(dump) <- dump_header
+            dump <- dump |>
+              mutate(`Player Name` = trimws(as.character(`Player Name`)), date = m$date, opponent = m$opponent, match_file = m$file)
+          }
+        }
+      }
+      list(file = athlete_file, date = m$date, opponent = m$opponent, attack = raw_attack, setting = setting, dump = dump, exists = TRUE)
+    })
+  })
+
+  canonical_player <- function(x) {
+    x <- trimws(as.character(x))
+    x[x == "Raf"] <- "Rafael"
+    x
+  }
+
+  athlete_role <- function(position) {
+    p <- toupper(trimws(as.character(position)))
+    if (p %in% c("S", "SETTER")) return("Setter")
+    if (p %in% c("L", "LIBERO", "DS")) return("Libero")
+    if (p %in% c("OH", "OUTSIDE HITTER")) return("Outside Hitter")
+    if (p %in% c("OPP", "OP", "OPPOSITE", "RS", "RIGHT SIDE")) return("Opposite")
+    if (p %in% c("MH", "MB", "MIDDLE", "MIDDLE HITTER", "MIDDLE BLOCKER")) return("Middle Hitter")
+    "Attacker"
+  }
+
+  athlete_attack_data <- reactive({
+    sel <- selected_athlete(); req(sel)
+    chunks <- lapply(athlete_match_data(), function(x) {
+      d <- x$attack
+      if (!nrow(d) || !all(c("Player Name", "Attack Type") %in% names(d))) return(tibble())
+      d |>
+        mutate(player_key = canonical_player(`Player Name`)) |>
+        filter(player_key == canonical_player(sel$name))
+    })
+    bind_rows(chunks)
+  })
+
+  athlete_reception_data <- reactive({
+    sel <- selected_athlete(); req(sel)
+    ms <- matches()
+    chunks <- lapply(ms, function(m) {
+      d <- m$passing
+      if (is.null(d) || !nrow(d) || !all(c("Player Name", "Contact Point") %in% names(d))) return(tibble())
+      d |>
+        mutate(player_key = canonical_player(`Player Name`), date = m$date, opponent = m$opponent, match_file = m$file) |>
+        filter(player_key == canonical_player(sel$name))
+    })
+    bind_rows(chunks)
+  })
+
+  athlete_profile_name <- reactive({
+    sel <- selected_athlete(); req(sel)
+    paste0("#", sel$jersey, " ", sel$name)
+  })
+
+  output$athlete_profile_ui <- renderUI({
+    sel <- selected_athlete(); req(sel)
+    role <- athlete_role(sel$position)
+    is_setter <- identical(role, "Setter")
+    is_libero <- identical(role, "Libero")
+    is_oh <- identical(role, "Outside Hitter")
+    is_reception_role <- is_libero || is_oh
+    is_attacker <- !is_setter && !is_libero
+    tagList(
+      div(class = "athlete-profile-wrap",
+        div(class = "athlete-profile-heading",
+          div(h2(class = "athlete-profile-title", athlete_profile_name()),
+              div(class = "athlete-profile-subtitle", paste(role, "· Individual match-by-match profile"))),
+          actionButton("athlete_back", "Back to Athletes", icon = icon("arrow-left"), class = "btn btn-outline-primary")
+        ),
+        if (is_setter) {
+          div(class = "athlete-profile-grid",
+            div(class = "athlete-profile-card athlete-profile-wide", h3("Setting Quality · Match by Match"), tableOutput("athlete_setting_table")),
+            div(class = "athlete-profile-card athlete-profile-wide", h3("Setter Attack / Dump · Match by Match"), tableOutput("athlete_dump_table"))
+          )
+        } else tagList(
+          if (is_attacker) div(class = "athlete-profile-grid",
+            div(class = "athlete-profile-card athlete-profile-wide", h3("Attack Efficiency by Match"), plotOutput("athlete_attack_plot", height = 310)),
+            div(class = "athlete-profile-card athlete-profile-wide", h3("Attack Type Summary · All Matches"), tableOutput("athlete_attack_table"))
+          ),
+          if (is_reception_role) div(class = "athlete-profile-grid",
+            div(class = "athlete-profile-card athlete-profile-wide", h3("Reception Profile · Contact Point"), tableOutput("athlete_reception_table")),
+            div(class = "athlete-profile-card athlete-profile-wide", h3("Reception by Match"), tableOutput("athlete_reception_matches_table"))
           )
         )
-      ) |>
-      rename(
-        `Jersey #` = Jersey,
-        `First Name` = FirstName
       )
+    )
+  })
 
-  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s")
+  output$athlete_attack_plot <- renderPlot({
+    sel <- selected_athlete(); req(sel)
+    d <- athlete_attack_data()
+    validate(need(nrow(d) > 0, "No matching athlete attack rows were found in the paired -Athlete.xlsx files."))
+    attempts_col <- "Attack Attempts"; kills_col <- "Kills"; errors_col <- "Error"; blocks_col <- "Stuffed Attacks"
+    d <- d |>
+      group_by(date, opponent, match_file) |>
+      summarise(attempts = sum(.data[[attempts_col]], na.rm = TRUE), kills = sum(.data[[kills_col]], na.rm = TRUE),
+                errors = sum(.data[[errors_col]], na.rm = TRUE), stuffed = sum(.data[[blocks_col]], na.rm = TRUE), .groups = "drop") |>
+      mutate(efficiency = ifelse(attempts > 0, (kills - errors - stuffed) / attempts, NA_real_),
+             match_label = ifelse(is.na(date), opponent, paste(format(date, "%b %d"), opponent, sep = " · ")))
+    ms <- matches()
+    team_eff <- vapply(ms, function(m) {
+      a <- m$attack
+      if (is.null(a) || !nrow(a)) return(NA_real_)
+      names_low <- tolower(names(a))
+      get_col <- function(pattern) { ix <- which(grepl(pattern, names_low)); if(length(ix)) names(a)[ix[1]] else NA_character_ }
+      at <- get_col("attempt")
+      ki <- get_col("kill")
+      er <- get_col("^error$|error")
+      bl <- get_col("stuff|block")
+      if (anyNA(c(at,ki,er,bl))) return(NA_real_)
+      vals <- lapply(c(at,ki,er,bl), function(nm) suppressWarnings(as.numeric(a[[nm]])))
+      den <- sum(vals[[1]], na.rm=TRUE)
+      if (den <= 0) NA_real_ else (sum(vals[[2]],na.rm=TRUE)-sum(vals[[3]],na.rm=TRUE)-sum(vals[[4]],na.rm=TRUE))/den
+    }, numeric(1))
+    team_lookup <- tibble(match_file = vapply(ms, `[[`, character(1), "file"), team_eff = team_eff)
+    d <- left_join(d, team_lookup, by="match_file") |>
+      arrange(date) |>
+      mutate(match_label = factor(match_label, levels = unique(match_label)))
+    p <- ggplot(d, aes(x = match_label, y = efficiency, group = 1)) +
+      geom_line(color = "#17466B", linewidth = 1.1, na.rm = TRUE) +
+      geom_point(color = "#17466B", size = 3, na.rm = TRUE) +
+      geom_line(aes(y = team_eff, group = 1), color = "#F07832", linewidth = 1, linetype = "dashed", na.rm = TRUE) +
+      geom_point(aes(y = team_eff), color = "#F07832", size = 2, na.rm = TRUE) +
+      labs(x = NULL, y = "Attack efficiency", caption = "Blue: player efficiency · Orange dashed: team attack-efficiency average") +
+      theme_minimal(base_size = 12) + theme(axis.text.x = element_text(angle = 35, hjust = 1), panel.grid.minor = element_blank())
+    p
+  })
+
+  output$athlete_attack_table <- renderTable({
+    d <- athlete_attack_data()
+    validate(need(nrow(d) > 0, "No attack data found for this player."))
+    type_col <- "Attack Type"
+    agg <- d |>
+      group_by(`Attack Type`) |>
+      summarise(Attempts = sum(`Attack Attempts`, na.rm=TRUE), Kills = sum(Kills, na.rm=TRUE),
+                `Stuffed Attacks` = sum(`Stuffed Attacks`, na.rm=TRUE), Error = sum(Error, na.rm=TRUE), .groups="drop") |>
+      mutate(Efficiency = ifelse(Attempts > 0, (Kills - `Stuffed Attacks` - Error) / Attempts, NA_real_))
+    total_row <- tibble(
+      `Attack Type` = "TOTAL",
+      Attempts = sum(agg$Attempts, na.rm=TRUE),
+      Kills = sum(agg$Kills, na.rm=TRUE),
+      `Stuffed Attacks` = sum(agg$`Stuffed Attacks`, na.rm=TRUE),
+      Error = sum(agg$Error, na.rm=TRUE),
+      Efficiency = ifelse(sum(agg$Attempts, na.rm=TRUE) > 0,
+        (sum(agg$Kills, na.rm=TRUE) - sum(agg$`Stuffed Attacks`, na.rm=TRUE) - sum(agg$Error, na.rm=TRUE)) / sum(agg$Attempts, na.rm=TRUE), NA_real_)
+    )
+    bind_rows(agg, total_row) |>
+      mutate(Efficiency = ifelse(is.na(Efficiency), "—", sprintf("%.3f", as.numeric(Efficiency)))) |>
+      rename(`Attack Eff.` = Efficiency)
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=3)
+
+  output$athlete_reception_table <- renderTable({
+    d <- athlete_reception_data()
+    validate(need(nrow(d) > 0, "No reception data found for this player in the match workbooks."))
+    needed <- c("Contact Point", "Total Pass", "Good Pass", "Aced")
+    validate(need(all(needed %in% names(d)), "Reception columns in the match workbook do not match the expected format."))
+    d |>
+      group_by(`Contact Point`) |>
+      summarise(Attempts = sum(`Total Pass`, na.rm=TRUE), `Good Pass` = sum(`Good Pass`, na.rm=TRUE), Aced = sum(Aced, na.rm=TRUE), .groups="drop") |>
+      mutate(`Good %` = ifelse(Attempts>0, sprintf("%.1f%%", 100*`Good Pass`/Attempts), "—"), `Aced %` = ifelse(Attempts>0, sprintf("%.1f%%", 100*Aced/Attempts), "—")) |>
+      select(`Contact Point`, Attempts, `Good Pass`, `Good %`, Aced, `Aced %`)
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s")
+
+  output$athlete_reception_matches_table <- renderTable({
+    d <- athlete_reception_data()
+    validate(need(nrow(d) > 0, "No reception data found for this player."))
+    needed <- c("Total Pass", "Good Pass", "Aced")
+    validate(need(all(needed %in% names(d)), "Reception columns in the match workbook do not match the expected format."))
+    d |>
+      group_by(date, opponent, match_file) |>
+      summarise(Attempts = sum(`Total Pass`, na.rm=TRUE), `Good Pass` = sum(`Good Pass`, na.rm=TRUE), Aced = sum(Aced, na.rm=TRUE), .groups="drop") |>
+      mutate(`Good %` = ifelse(Attempts>0, sprintf("%.1f%%",100*`Good Pass`/Attempts),"—"), Match = ifelse(is.na(date),opponent,paste(format(date,"%b %d"),opponent,sep=" · "))) |>
+      select(Match, Attempts, `Good Pass`, `Good %`, Aced)
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s")
+
+  output$athlete_setting_table <- renderTable({
+    sel <- selected_athlete(); req(sel)
+    rows <- lapply(athlete_match_data(), function(x) {
+      d <- x$setting
+      if (!nrow(d) || !"Player Name" %in% names(d)) return(tibble())
+      d |> mutate(player_key=canonical_player(`Player Name`)) |> filter(player_key==canonical_player(sel$name))
+    })
+    d <- bind_rows(rows)
+    validate(need(nrow(d)>0, "No setting-quality data found for this setter."))
+    for (nm in intersect(c("Positive Sets","Off Sets","Poor Sets","Setting Errors","Total Attempts","Positive Sets %"),names(d))) d[[nm]] <- suppressWarnings(as.numeric(d[[nm]]))
+    counts <- intersect(c("Positive Sets","Off Sets","Poor Sets","Setting Errors","Total Attempts"), names(d))
+    total <- d[1,,drop=FALSE]
+    for(nm in counts) total[[nm]] <- sum(d[[nm]],na.rm=TRUE)
+    pct_col <- "Positive Sets %"
+    if(pct_col %in% names(total)) total[[pct_col]] <- ifelse(total[["Total Attempts"]]>0,total[["Positive Sets"]]/total[["Total Attempts"]],NA_real_)
+    total$opponent <- "TOTAL"
+    total$date <- as.Date(NA)
+    total$match_file <- "TOTAL"
+    out <- bind_rows(d,total) |> mutate(Match=ifelse(opponent=="TOTAL","TOTAL",ifelse(is.na(date),opponent,paste(format(date,"%b %d"),opponent,sep=" · "))))
+    if(pct_col %in% names(out)) out[[pct_col]] <- ifelse(is.na(out[[pct_col]]),"—",sprintf("%.1f%%",100*as.numeric(out[[pct_col]])))
+    out |> select(Match, any_of(c("Positive Sets","Off Sets","Poor Sets","Setting Errors","Total Attempts","Positive Sets %")))
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s")
+
+  output$athlete_dump_table <- renderTable({
+    sel <- selected_athlete(); req(sel)
+    rows <- lapply(athlete_match_data(), function(x) {
+      d <- x$dump
+      if (!nrow(d) || !"Player Name" %in% names(d)) return(tibble())
+      d |> mutate(player_key=canonical_player(`Player Name`)) |> filter(player_key==canonical_player(sel$name))
+    })
+    d <- bind_rows(rows)
+    validate(need(nrow(d)>0, "No setter attack/dump data found for this player."))
+    for(nm in intersect(c("Attempts","Kills","Stuffed Attacks","Error","Eff."),names(d))) d[[nm]] <- suppressWarnings(as.numeric(d[[nm]]))
+    total <- d[1,,drop=FALSE]
+    for(nm in intersect(c("Attempts","Kills","Stuffed Attacks","Error"),names(d))) total[[nm]] <- sum(d[[nm]],na.rm=TRUE)
+    if("Eff." %in% names(total)) total[["Eff."]] <- ifelse(total$Attempts>0,(total$Kills-total$`Stuffed Attacks`-total$Error)/total$Attempts,NA_real_)
+    total$opponent <- "TOTAL"; total$date <- as.Date(NA); total$match_file <- "TOTAL"
+    out <- bind_rows(d,total) |> mutate(Match=ifelse(opponent=="TOTAL","TOTAL",ifelse(is.na(date),opponent,paste(format(date,"%b %d"),opponent,sep=" · "))))
+    if("Eff." %in% names(out)) out[["Eff."]] <- ifelse(is.na(out[["Eff."]]),"—",sprintf("%.3f",as.numeric(out[["Eff."]])))
+    out |> select(Match, any_of(c("Attempts","Kills","Stuffed Attacks","Error","Eff.")))
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s")
 
   # ---------------- KEY METRICS ----------------
 
