@@ -618,6 +618,15 @@ ui <- page_fluid(
       .athlete-profile-card h3 { margin:0 0 12px; font-size:18px; color:#17324d; }
       .athlete-profile-card table { width:100% !important; }
       .athlete-profile-card .table-responsive { width:100%; }
+      #athlete_attack_table table tbody tr:last-child td,
+      #athlete_setting_table table tbody tr:last-child td,
+      #athlete_dump_table table tbody tr:last-child td {
+        font-weight: 800 !important;
+        background: #e7eef5 !important;
+        color: #17324d !important;
+        border-top: 2px solid #17466B !important;
+      }
+      .athlete-passing-profile-card { width:100%; max-width:760px; margin:0 auto; }
       .athlete-profile-wide { grid-column:1 / -1; }
       @media(max-width:800px) { .athlete-profile-grid { grid-template-columns:1fr; } .athlete-profile-wide { grid-column:auto; } }
 
@@ -1574,7 +1583,7 @@ server <- function(input, output, session) {
             div(class = "athlete-profile-card athlete-profile-wide", h3("Attack Type Summary · All Matches"), tableOutput("athlete_attack_table"))
           ),
           if (is_reception_role) div(class = "athlete-profile-grid",
-            div(class = "athlete-profile-card athlete-profile-wide", h3("Reception Profile · Contact Point"), tableOutput("athlete_reception_table")),
+            div(class = "athlete-profile-card athlete-profile-wide", h3("Passing by Contact Point"), uiOutput("athlete_passing_profile_ui")),
             div(class = "athlete-profile-card athlete-profile-wide", h3("Reception by Match"), tableOutput("athlete_reception_matches_table"))
           )
         )
@@ -1586,39 +1595,64 @@ server <- function(input, output, session) {
     sel <- selected_athlete(); req(sel)
     d <- athlete_attack_data()
     validate(need(nrow(d) > 0, "No matching athlete attack rows were found in the paired -Athlete.xlsx files."))
-    attempts_col <- "Attack Attempts"; kills_col <- "Kills"; errors_col <- "Error"; blocks_col <- "Stuffed Attacks"
     d <- d |>
       group_by(date, opponent, match_file) |>
-      summarise(attempts = sum(.data[[attempts_col]], na.rm = TRUE), kills = sum(.data[[kills_col]], na.rm = TRUE),
-                errors = sum(.data[[errors_col]], na.rm = TRUE), stuffed = sum(.data[[blocks_col]], na.rm = TRUE), .groups = "drop") |>
-      mutate(efficiency = ifelse(attempts > 0, (kills - errors - stuffed) / attempts, NA_real_),
-             match_label = ifelse(is.na(date), opponent, paste(format(date, "%b %d"), opponent, sep = " · ")))
+      summarise(
+        attempts = sum(suppressWarnings(as.numeric(`Attack Attempts`)), na.rm = TRUE),
+        kills = sum(suppressWarnings(as.numeric(Kills)), na.rm = TRUE),
+        errors = sum(suppressWarnings(as.numeric(Error)), na.rm = TRUE),
+        stuffed = sum(suppressWarnings(as.numeric(`Stuffed Attacks`)), na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      mutate(
+        efficiency = ifelse(attempts > 0, (kills - errors - stuffed) / attempts, NA_real_),
+        match_key = basename(as.character(match_file)),
+        match_label = ifelse(is.na(date), opponent, paste(format(date, "%b %d"), opponent, sep = " · "))
+      )
+
+    # Team efficiency is calculated from each corresponding main match workbook.
+    # Match on basenames to avoid path/filename mismatches.
     ms <- matches()
-    team_eff <- vapply(ms, function(m) {
+    team_lookup <- lapply(ms, function(m) {
       a <- m$attack
-      if (is.null(a) || !nrow(a)) return(NA_real_)
-      names_low <- tolower(names(a))
-      get_col <- function(pattern) { ix <- which(grepl(pattern, names_low)); if(length(ix)) names(a)[ix[1]] else NA_character_ }
-      at <- get_col("attempt")
-      ki <- get_col("kill")
-      er <- get_col("^error$|error")
-      bl <- get_col("stuff|block")
-      if (anyNA(c(at,ki,er,bl))) return(NA_real_)
-      vals <- lapply(c(at,ki,er,bl), function(nm) suppressWarnings(as.numeric(a[[nm]])))
-      den <- sum(vals[[1]], na.rm=TRUE)
-      if (den <= 0) NA_real_ else (sum(vals[[2]],na.rm=TRUE)-sum(vals[[3]],na.rm=TRUE)-sum(vals[[4]],na.rm=TRUE))/den
-    }, numeric(1))
-    team_lookup <- tibble(match_file = vapply(ms, `[[`, character(1), "file"), team_eff = team_eff)
-    d <- left_join(d, team_lookup, by="match_file") |>
-      arrange(date) |>
-      mutate(match_label = factor(match_label, levels = unique(match_label)))
+      team_eff <- NA_real_
+      if (!is.null(a) && nrow(a) > 0) {
+        nm <- names(a)
+        low <- tolower(trimws(nm))
+        find_col <- function(patterns) {
+          hit <- which(Reduce(`|`, lapply(patterns, function(pat) grepl(pat, low))))
+          if (length(hit)) nm[hit[1]] else NA_character_
+        }
+        at <- find_col(c("attack attempts", "^attempts?$"))
+        ki <- find_col(c("^kills?$"))
+        er <- find_col(c("^error$"))
+        bl <- find_col(c("stuffed attacks", "blocks?"))
+        if (!anyNA(c(at, ki, er, bl))) {
+          vals <- lapply(c(at, ki, er, bl), function(col) suppressWarnings(as.numeric(a[[col]])))
+          attempts_sum <- sum(vals[[1]], na.rm = TRUE)
+          if (attempts_sum > 0) {
+            team_eff <- (sum(vals[[2]], na.rm = TRUE) - sum(vals[[3]], na.rm = TRUE) -
+                         sum(vals[[4]], na.rm = TRUE)) / attempts_sum
+          }
+        }
+      }
+      tibble(match_key = basename(as.character(m$file)), team_eff = team_eff)
+    })
+    d <- left_join(d, bind_rows(team_lookup), by = "match_key") |> arrange(date)
+    d$match_label <- factor(d$match_label, levels = unique(d$match_label))
+    team_average <- if (any(is.finite(d$team_eff))) mean(d$team_eff[is.finite(d$team_eff)]) else NA_real_
+
     p <- ggplot(d, aes(x = match_label, y = efficiency, group = 1)) +
       geom_line(color = "#17466B", linewidth = 1.1, na.rm = TRUE) +
       geom_point(color = "#17466B", size = 3, na.rm = TRUE) +
-      geom_line(aes(y = team_eff, group = 1), color = "#F07832", linewidth = 1, linetype = "dashed", na.rm = TRUE) +
-      geom_point(aes(y = team_eff), color = "#F07832", size = 2, na.rm = TRUE) +
-      labs(x = NULL, y = "Attack efficiency", caption = "Blue: player efficiency · Orange dashed: team attack-efficiency average") +
-      theme_minimal(base_size = 12) + theme(axis.text.x = element_text(angle = 35, hjust = 1), panel.grid.minor = element_blank())
+      labs(x = NULL, y = "Attack efficiency",
+           caption = "Blue: player efficiency · Orange dashed: team attack-efficiency average") +
+      theme_minimal(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 35, hjust = 1), panel.grid.minor = element_blank())
+    if (is.finite(team_average)) {
+      p <- p + geom_hline(yintercept = team_average, color = "#F07832",
+                          linewidth = 1, linetype = "dashed")
+    }
     p
   })
 
@@ -1643,7 +1677,84 @@ server <- function(input, output, session) {
     bind_rows(agg, total_row) |>
       mutate(Efficiency = ifelse(is.na(Efficiency), "—", sprintf("%.3f", as.numeric(Efficiency)))) |>
       rename(`Attack Eff.` = Efficiency)
-  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=3)
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=0)
+
+  output$athlete_passing_profile_ui <- renderUI({
+    sel <- selected_athlete(); req(sel)
+    d <- athlete_reception_data()
+    validate(need(nrow(d) > 0, "No passing-by-contact-point data found for this player."))
+
+    d <- d |>
+      mutate(
+        `Contact Point` = trimws(as.character(`Contact Point`)),
+        `Total Pass` = suppressWarnings(as.numeric(`Total Pass`)),
+        `Good Pass` = suppressWarnings(as.numeric(`Good Pass`)),
+        Aced = suppressWarnings(as.numeric(Aced))
+      ) |>
+      group_by(`Contact Point`) |>
+      summarise(
+        `Total Pass` = sum(`Total Pass`, na.rm = TRUE),
+        `Good Pass` = sum(`Good Pass`, na.rm = TRUE),
+        Aced = sum(Aced, na.rm = TRUE),
+        .groups = "drop"
+      ) |>
+      mutate(
+        `GP %` = ifelse(`Total Pass` > 0, `Good Pass` / `Total Pass`, NA_real_),
+        `Aced %` = ifelse(`Total Pass` > 0, Aced / `Total Pass`, NA_real_)
+      )
+
+    point_ui <- function(point_name, class_name) {
+      z <- d[tolower(d$`Contact Point`) == tolower(point_name), , drop = FALSE]
+      if (!nrow(z) || is.na(z$`Total Pass`[1]) || z$`Total Pass`[1] <= 0) {
+        return(div(class = paste("passing-point", class_name),
+          div(class = "passing-point-title", point_name),
+          div(class = "passing-point-empty", "none")))
+      }
+      total <- z$`Total Pass`[1]
+      gp <- z$`GP %`[1]
+      aced <- z$Aced[1]
+      ap <- z$`Aced %`[1]
+      div(class = paste("passing-point", class_name),
+        div(class = "passing-point-title", point_name),
+        div(class = "passing-point-count",
+          span(if (is.finite(gp)) sprintf("%.0f%%", gp * 100) else "—"),
+          span(class = "passing-good-label", "good")
+        ),
+        div(class = "passing-point-sub", tags$strong(paste0(format(round(total), trim = TRUE), " attempts"))),
+        div(class = "passing-point-sub",
+          paste0(format(round(aced), trim = TRUE), " aced",
+                 ifelse(is.finite(ap), paste0(" · ", round(ap * 100), "%"), "")))
+      )
+    }
+
+    total_passes <- sum(d$`Total Pass`, na.rm = TRUE)
+    total_good <- sum(d$`Good Pass`, na.rm = TRUE)
+    total_aced <- sum(d$Aced, na.rm = TRUE)
+    div(class = "athlete-passing-profile-card",
+      div(class = "passing-player-card",
+        div(class = "passing-player-header", style = "background-color:#123f68 !important; color:#ffffff !important;",
+          div(class = "passing-player-name", paste0("#", sel$jersey, " ", sel$name)),
+          div(class = "passing-player-meta", as.character(sel$position))
+        ),
+        div(class = "passing-player-caption", "Contact-point outcomes · player facing you"),
+        div(class = "passing-court-stage",
+          point_ui("Overhand", "passing-overhand"),
+          point_ui("His Right", "passing-left"),
+          div(class = "passing-player-figure",
+            tags$img(src = URLencode(passing_player_image, reserved = TRUE), alt = "Volleyball player silhouette"),
+            point_ui("On body", "passing-body-point")
+          ),
+          point_ui("His Left", "passing-right"),
+          point_ui("Low", "passing-low")
+        ),
+        div(class = "passing-player-footer",
+          span(HTML(paste0("<strong>", format(round(total_passes), trim = TRUE), "</strong> passes"))),
+          span(HTML(paste0("<strong>", if (total_passes > 0) sprintf("%.1f%%", total_good / total_passes * 100) else "—", "</strong> good"))),
+          span(HTML(paste0("<strong>", format(round(total_aced), trim = TRUE), "</strong> aced")))
+        )
+      )
+    )
+  })
 
   output$athlete_reception_table <- renderTable({
     d <- athlete_reception_data()
@@ -1655,7 +1766,7 @@ server <- function(input, output, session) {
       summarise(Attempts = sum(`Total Pass`, na.rm=TRUE), `Good Pass` = sum(`Good Pass`, na.rm=TRUE), Aced = sum(Aced, na.rm=TRUE), .groups="drop") |>
       mutate(`Good %` = ifelse(Attempts>0, sprintf("%.1f%%", 100*`Good Pass`/Attempts), "—"), `Aced %` = ifelse(Attempts>0, sprintf("%.1f%%", 100*Aced/Attempts), "—")) |>
       select(`Contact Point`, Attempts, `Good Pass`, `Good %`, Aced, `Aced %`)
-  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s")
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=0)
 
   output$athlete_reception_matches_table <- renderTable({
     d <- athlete_reception_data()
@@ -1667,7 +1778,7 @@ server <- function(input, output, session) {
       summarise(Attempts = sum(`Total Pass`, na.rm=TRUE), `Good Pass` = sum(`Good Pass`, na.rm=TRUE), Aced = sum(Aced, na.rm=TRUE), .groups="drop") |>
       mutate(`Good %` = ifelse(Attempts>0, sprintf("%.1f%%",100*`Good Pass`/Attempts),"—"), Match = ifelse(is.na(date),opponent,paste(format(date,"%b %d"),opponent,sep=" · "))) |>
       select(Match, Attempts, `Good Pass`, `Good %`, Aced)
-  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s")
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=0)
 
   output$athlete_setting_table <- renderTable({
     sel <- selected_athlete(); req(sel)
@@ -1690,7 +1801,7 @@ server <- function(input, output, session) {
     out <- bind_rows(d,total) |> mutate(Match=ifelse(opponent=="TOTAL","TOTAL",ifelse(is.na(date),opponent,paste(format(date,"%b %d"),opponent,sep=" · "))))
     if(pct_col %in% names(out)) out[[pct_col]] <- ifelse(is.na(out[[pct_col]]),"—",sprintf("%.1f%%",100*as.numeric(out[[pct_col]])))
     out |> select(Match, any_of(c("Positive Sets","Off Sets","Poor Sets","Setting Errors","Total Attempts","Positive Sets %")))
-  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s")
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=0)
 
   output$athlete_dump_table <- renderTable({
     sel <- selected_athlete(); req(sel)
@@ -1709,7 +1820,7 @@ server <- function(input, output, session) {
     out <- bind_rows(d,total) |> mutate(Match=ifelse(opponent=="TOTAL","TOTAL",ifelse(is.na(date),opponent,paste(format(date,"%b %d"),opponent,sep=" · "))))
     if("Eff." %in% names(out)) out[["Eff."]] <- ifelse(is.na(out[["Eff."]]),"—",sprintf("%.3f",as.numeric(out[["Eff."]])))
     out |> select(Match, any_of(c("Attempts","Kills","Stuffed Attacks","Error","Eff.")))
-  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s")
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=0)
 
   # ---------------- KEY METRICS ----------------
 
