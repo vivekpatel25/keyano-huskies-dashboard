@@ -806,8 +806,8 @@ ui <- page_fluid(
       .passing-player-figure { grid-column:2; grid-row:2; height:205px; width:190px; display:flex; justify-content:center; align-items:center; position:relative; z-index:1; overflow:visible; }
       .passing-player-figure img { display:block; width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; object-position:center; }
       .passing-body-point { position:absolute; top:49%; left:50%; transform:translate(-50%,-50%); width:100%; min-height:54px; padding:5px 4px; border:0; border-radius:0; background:rgba(255,255,255,.18); text-align:center; box-shadow:none; }
-      .passing-body-point .passing-point-title { font-size:9px; margin:0; }
-      .passing-body-point .passing-point-count { font-size:21px; }
+      .passing-body-point { color:#123f68; font-weight:800; text-shadow:0 1px 2px rgba(255,255,255,.95); background:rgba(255,255,255,.78); border-radius:5px; }\n      .passing-body-point .passing-point-title { font-size:11px; font-weight:900; margin:0; color:#123f68; }
+      .passing-body-point .passing-point-count { font-size:24px; font-weight:900; color:#123f68; }\n      .passing-body-point .passing-point-sub { font-weight:800; color:#123f68; }
       .passing-player-footer { border-top:1px solid #e7edf2; padding:8px 12px; display:flex; justify-content:space-between; color:#607488; font-size:10px; gap:8px; }
       .passing-player-footer strong { color:#263746; }
       @media(max-width:1050px) { .passing-player-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
@@ -2266,12 +2266,12 @@ server <- function(input, output, session) {
         div(class = "passing-player-caption", "Contact-point outcomes · player facing you"),
         div(class = "passing-court-stage",
           point_ui(rows, "Overhand", "passing-overhand"),
-          point_ui(rows, "His Left", "passing-left"),
+          point_ui(rows, "His Right", "passing-left"),
           div(class = "passing-player-figure",
             tags$img(src = URLencode(passing_player_image, reserved = TRUE), alt = "Volleyball player silhouette"),
             point_ui(rows, "On body", "passing-body-point")
           ),
-          point_ui(rows, "His Right", "passing-right"),
+          point_ui(rows, "His Left", "passing-right"),
           point_ui(rows, "Low", "passing-low")
         ),
         div(class = "passing-player-footer",
