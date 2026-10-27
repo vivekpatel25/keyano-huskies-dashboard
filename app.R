@@ -796,7 +796,8 @@ ui <- page_fluid(
       .passing-court-stage { display:grid; grid-template-columns:minmax(0,1fr) 190px minmax(0,1fr); grid-template-rows:54px 205px 54px; gap:5px 2px; padding:8px 9px 15px; min-height:350px; align-items:center; }
       .passing-point { text-align:center; min-width:0; z-index:2; color:#5d7081; }
       .passing-point-title { font-size:11px; letter-spacing:.35px; text-transform:uppercase; font-weight:800; margin-bottom:3px; }
-      .passing-point-count { font-size:26px; font-weight:900; line-height:1; color:#263746; }
+      .passing-point-count { font-size:26px; font-weight:900; line-height:1; color:#263746; display:flex; align-items:baseline; justify-content:center; gap:4px; }
+      .passing-good-label { font-size:10px; font-weight:600; line-height:1; color:#607488; }
       .passing-point-sub { font-size:10px; line-height:1.3; margin-top:3px; white-space:normal; }
       .passing-point-empty { color:#a6b1bb; font-style:italic; font-size:11px; }
       .passing-overhand { grid-column:1 / 4; grid-row:1; }
@@ -2240,7 +2241,10 @@ server <- function(input, output, session) {
       ap <- z$`Aced %`[1]
       div(class = paste("passing-point", class_name),
         div(class = "passing-point-title", point_name),
-        div(class = "passing-point-count", if (is.finite(gp)) sprintf("%.0f%%", gp * 100) else "—"),
+        div(class = "passing-point-count",
+          span(if (is.finite(gp)) sprintf("%.0f%%", gp * 100) else "—"),
+          span(class = "passing-good-label", "good")
+        ),
         div(class = "passing-point-sub",
           tags$strong(paste0(format(round(total), nsmall = 0, trim = TRUE), " attempts"))),
         div(class = "passing-point-sub",
