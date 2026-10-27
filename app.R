@@ -1724,7 +1724,7 @@ server <- function(input, output, session) {
       shown[[nm]] <- ifelse(is.finite(shown[[nm]]), sprintf("%.3f", shown[[nm]]), "—")
     }
     shown
-  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s", width = "100%", align = "lrrrrrrr")
+  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s", width = "100%", align = "l")
 
 
   output$attack_type_selector <- renderUI({
