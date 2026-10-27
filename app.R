@@ -593,31 +593,29 @@ ui <- page_fluid(
         color: #2F75B5 !important;
       }
 
-      /* Use the full available browser width while preserving the existing layout. */
-      html, body {
-        width: 100%;
-        max-width: 100%;
-        margin: 0;
-      }
-
-      .container-fluid {
-        width: 100% !important;
-        max-width: none !important;
-        padding-left: 20px !important;
-        padding-right: 20px !important;
-      }
-
       .content-card {
         min-height: 320px;
-        width: 100%;
+        width: 100% !important;
         max-width: none !important;
         box-sizing: border-box;
       }
 
+      /* Let Attack Detail use the full content area, not the table's natural width. */
       .analytics-section,
-      .key-metrics-panel,
-      .chart-card {
-        width: 100%;
+      .chart-card.attack-summary-card {
+        width: 100% !important;
+        max-width: none !important;
+        box-sizing: border-box;
+      }
+
+      .chart-card.attack-summary-card {
+        display: block !important;
+      }
+
+      .attack-summary-card .shiny-table,
+      .attack-summary-card table,
+      .attack-summary-card .table-responsive {
+        width: 100% !important;
         max-width: none !important;
         box-sizing: border-box;
       }
@@ -670,7 +668,21 @@ ui <- page_fluid(
 
       .table-wrap {
         overflow-x: auto;
+        width: 100%;
       }
+      .table-wrap table {
+        width: 100% !important;
+        table-layout: fixed;
+      }
+      .table-wrap table th,
+      .table-wrap table td {
+        white-space: normal;
+      }
+      .attack-summary-card table { width:100% !important; table-layout:fixed; }
+      .attack-summary-card table th { color:#5b7184; font-size:11px; text-transform:uppercase; border-bottom:1px solid #d6e0e8; }
+      .attack-summary-card table td { border-top:1px solid #d6e0e8; padding:8px 10px; }
+      .attack-summary-card .form-group { margin:0; }
+      .attack-summary-card .control-label { display:none; }
 
       .key-metrics-panel { background:#fff; border:1px solid #dce5ed; border-radius:14px; padding:22px; }
       .metric-group { margin-top:22px; }
@@ -798,6 +810,7 @@ ui <- page_fluid(
   # Single continuous scrolling content area
   div(
     class = "content-card",
+    style = "width:100%; max-width:none; box-sizing:border-box;",
     uiOutput("page_content")
   ),
 
@@ -1140,18 +1153,6 @@ server <- function(input, output, session) {
         uiOutput("skill_cards_ui")
       ),
 
-      tags$style(HTML("
-        .attack-table-card { padding: 14px 16px 18px; }
-        .attack-table-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; border-bottom:1px solid #d7e1ea; margin-bottom:4px; }
-        .attack-table-heading h3 { margin:0 0 8px 0; font-size:16px; font-weight:800; color:#17324d; }
-        .attack-phase-filter { min-width:190px; }
-        .attack-phase-filter .form-group { margin-bottom:6px; }
-        .attack-phase-filter .control-label { display:none; }
-        .attack-table-card table { width:100%; margin-bottom:0; border-collapse:collapse; }
-        .attack-table-card thead th { color:#60788d; font-size:10px; text-transform:uppercase; font-weight:800; border:0; border-bottom:1px solid #d7e1ea; padding:8px 9px; }
-        .attack-table-card tbody td { border:0; border-bottom:1px solid #d7e1ea; padding:10px 9px; color:#526b82; font-size:13px; }
-        .attack-table-card tbody td:first-child { color:#17324d; font-weight:700; }
-      ")), 
       # 3. Attack Detail
       div(
         class = "analytics-section",
@@ -1162,17 +1163,14 @@ server <- function(input, output, session) {
         ),
 
         div(
-          class = "chart-card table-wrap attack-table-card",
+          class = "chart-card table-wrap attack-summary-card",
           div(
-            class = "attack-table-heading",
-            h3("ATTACK TYPE SUMMARY"),
-            div(
-              class = "attack-phase-filter",
-              selectInput(
-                "attack_phase_filter", NULL,
-                choices = c("All" = "All", "First Ball (FB)" = "FB", "Transition" = "Transition"),
-                selected = "All", width = "190px"
-              )
+            style = "display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:10px;",
+            h3("ATTACK TYPE SUMMARY", style = "margin:0;"),
+            selectInput(
+              "attack_phase_filter", NULL,
+              choices = c("All" = "All", "First Ball (FB)" = "FB", "Transition" = "Transition"),
+              selected = "All", width = "190px"
             )
           ),
           tableOutput("attack_table")
@@ -1679,6 +1677,12 @@ server <- function(input, output, session) {
         `FB Eff.` = attack_eff(fb_k, fb_e, fb_a),
         `Transition Eff.` = attack_eff(tr_k, tr_e, tr_a),
         `Total Eff.` = attack_eff(all_k, all_e, all_a),
+        `FB Attempts` = fb_a,
+        `FB Kills` = fb_k,
+        `FB Errors` = fb_e,
+        `Transition Attempts` = tr_a,
+        `Transition Kills` = tr_k,
+        `Transition Errors` = tr_e,
         check.names = FALSE
       )
     })
@@ -1690,43 +1694,38 @@ server <- function(input, output, session) {
     d <- attack_summary()
     validate(need(nrow(d) > 0, "No attack detail found in the selected matches."))
 
-    phase <- input$attack_phase_filter
-    if (is.null(phase) || !nzchar(phase)) phase <- "All"
-    if (phase %in% c("FB", "Transition")) {
-      raw <- attack_period_data()
-      rows <- lapply(as.character(d[["Attack Type"]]), function(tp) {
-        z <- raw[raw[["Attack Type"]] == tp, , drop = FALSE]
-        if (phase == "FB") {
-          z <- z[tolower(z[["Previous Play"]]) %in% c("fb", "first ball", "first-ball", "firstball"), , drop = FALSE]
-        } else {
-          z <- z[tolower(z[["Previous Play"]]) %in% c("transition", "trans", "transition attack"), , drop = FALSE]
-        }
-        a <- sum(z$Attempts, na.rm = TRUE)
-        k <- sum(z$Kills, na.rm = TRUE)
-        e <- sum(z$Error, na.rm = TRUE)
-        eff <- attack_eff(k, e, a)
-        data.frame(
-          `Attack Type` = tp,
-          Attempts = a,
-          Kills = k,
-          Errors = e,
-          `FB Eff.` = if (phase == "FB") eff else NA_real_,
-          `Transition Eff.` = if (phase == "Transition") eff else NA_real_,
-          `Total Eff.` = eff,
-          check.names = FALSE
-        )
-      })
-      d <- dplyr::bind_rows(rows)
+    phase <- if (is.null(input$attack_phase_filter) || !nzchar(input$attack_phase_filter)) "All" else input$attack_phase_filter
+    if (identical(phase, "FB")) {
+      shown <- data.frame(
+        `Attack Type` = d[["Attack Type"]],
+        Attempts = d[["FB Attempts"]],
+        Kills = d[["FB Kills"]],
+        Errors = d[["FB Errors"]],
+        `FB Eff.` = d[["FB Eff."]],
+        check.names = FALSE
+      )
+    } else if (identical(phase, "Transition")) {
+      shown <- data.frame(
+        `Attack Type` = d[["Attack Type"]],
+        Attempts = d[["Transition Attempts"]],
+        Kills = d[["Transition Kills"]],
+        Errors = d[["Transition Errors"]],
+        `Transition Eff.` = d[["Transition Eff."]],
+        check.names = FALSE
+      )
+    } else {
+      shown <- d[, c("Attack Type", "Attempts", "Kills", "Errors", "FB Eff.", "Transition Eff.", "Total Eff."), drop = FALSE]
     }
 
-    d$Attempts <- round(d$Attempts, 0)
-    d$Kills <- round(d$Kills, 0)
-    d$Errors <- round(d$Errors, 0)
-    for (nm in c("FB Eff.", "Transition Eff.", "Total Eff.")) {
-      d[[nm]] <- ifelse(is.finite(d[[nm]]), sprintf("%.3f", d[[nm]]), "—")
+    for (nm in intersect(c("Attempts", "Kills", "Errors"), names(shown))) {
+      shown[[nm]] <- ifelse(is.finite(shown[[nm]]), as.character(as.integer(round(shown[[nm]]))), "—")
     }
-    d
-  }, striped = FALSE, bordered = FALSE, hover = FALSE, spacing = "xs", align = "lrrrrrr")
+    for (nm in intersect(c("FB Eff.", "Transition Eff.", "Total Eff."), names(shown))) {
+      shown[[nm]] <- ifelse(is.finite(shown[[nm]]), sprintf("%.3f", shown[[nm]]), "—")
+    }
+    shown
+  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s", width = "100%", align = "lrrrrrrr")
+
 
   output$attack_type_selector <- renderUI({
     d <- attack_summary()
