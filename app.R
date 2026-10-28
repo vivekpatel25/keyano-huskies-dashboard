@@ -9,7 +9,6 @@ library(readxl)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
-library(jsonlite)
 
 parse_match_date <- function(x) {
   if (inherits(x, "Date")) {
@@ -90,14 +89,6 @@ match_windows <- c(
   "Full Season"
 )
 
-
-# Huskies positive outcomes are highlighted green; error classification takes priority.
-is_redzone_good <- function(event) {
-  event <- trimws(as.character(event %||% ""))
-  if (!nzchar(event)) return(FALSE)
-  if (grepl("serve\\s*error|attack\\s*error|negative\\s*block|block\\s*error", event, ignore.case = TRUE)) return(FALSE)
-  grepl("FBK|D-S-K|\\bAce\\b|\\bBlock\\b|(^|[^A-Za-z])K([^A-Za-z]|$)|\\bKill\\b", event, ignore.case = TRUE)
-}
 
 # ---------------- RED ZONE PARSER ----------------
 # The Match Information sheet contains a variable-length point sequence for each set.
@@ -987,18 +978,9 @@ ui <- page_fluid(
         }
       }
 
-      .dashboard-header { grid-template-columns:minmax(0,1fr) auto auto auto !important; }
-      .reports-link { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; margin-left:0; min-width:72px; }
-      .reports-nav-button { border:0; background:transparent; color:#17324d; font-weight:800; display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px; }
+      .reports-link { display:flex; align-items:center; gap:6px; margin-left:12px; }
+      .reports-nav-button { border:0; background:transparent; color:#17324d; font-weight:800; }
       .reports-nav-button:hover, .reports-nav-button:focus { color:#2F75B5 !important; }
-      .report-match-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px; }
-      .report-match-row { width:100%; text-align:left; border:1px solid #d8e2ec; background:#fff; border-radius:12px; padding:16px 18px; color:#17324d; cursor:pointer; }
-      .report-match-row:hover, .report-match-row:focus { border-color:#2F75B5; background:#f4f8fc; box-shadow:0 4px 14px rgba(23,50,77,.08); }
-      .report-match-date { display:block; font-size:12px; color:#607488; margin-bottom:5px; }
-      .report-match-opponent { display:block; font-size:19px; font-weight:800; }
-      .report-match-result { display:block; margin-top:6px; font-size:13px; color:#52677b; }
-      .redzone-good-row td { background:#eaf7ed !important; color:#176b35; font-weight:700; }
-      @media(max-width:700px) { .dashboard-header { grid-template-columns:1fr auto auto !important; } .report-match-list { grid-template-columns:1fr; } }
       .redzone-match-card { background:#fff; border:1px solid #d8e2ec; border-radius:12px; padding:16px; margin:14px 0; break-inside:avoid; }
       .redzone-set-card { border:1px solid #e1e8ef; border-radius:9px; padding:12px; margin:10px 0; }
       .redzone-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:12px 0 18px; }
@@ -1008,6 +990,24 @@ ui <- page_fluid(
       .redzone-table { width:100%; border-collapse:collapse; }
       .redzone-table th, .redzone-table td { padding:7px 9px; border-bottom:1px solid #e5ebf0; text-align:left; }
       .redzone-table th { color:#52677b; border-bottom:2px solid #17324d; }
+      .reports-page-heading { margin-bottom:18px; }
+      .report-match-card { display:flex; justify-content:space-between; align-items:center; gap:18px; background:#fff; border:1px solid #d8e2ec; border-radius:14px; padding:18px 22px; margin:12px 0; box-shadow:0 2px 8px rgba(23,50,77,.04); }
+      .report-match-copy h3 { margin:3px 0 5px; color:#17324d; }
+      .report-match-date { color:#6c8296; font-size:12px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+      .report-match-result { margin:0; color:#60788d; }
+      .report-match-open { border:0; border-radius:7px; background:#0e315e; color:#fff; font-weight:800; padding:11px 15px; white-space:nowrap; }
+      .report-match-open:hover { background:#245786; }
+      .report-back-row { display:flex; justify-content:space-between; gap:10px; margin-bottom:16px; }
+      .report-performance-panel { border:1px solid #d8e2ec; border-radius:12px; padding:20px; margin:18px 0; }
+      .report-performance-panel .metric-group { margin:14px 0; }
+      .report-performance-panel .metric-group-title { font-size:12px; letter-spacing:.08em; font-weight:900; border-bottom:3px solid #344454; padding-bottom:8px; margin-bottom:8px; }
+      .report-performance-panel .metric-row { display:grid; grid-template-columns:minmax(180px, .8fr) 80px minmax(260px, 1.5fr); gap:18px; align-items:center; padding:12px 0; border-bottom:1px solid #d8e2ec; }
+      .report-performance-panel .metric-track { background:#f2e8e1; height:15px; border-radius:10px; overflow:hidden; }
+      .report-performance-panel .metric-fill { height:100%; border-radius:10px; }
+      .report-performance-panel .metric-good { background:#159b68; }
+      .report-performance-panel .metric-bad { background:#e5483b; }
+      .report-performance-panel .metric-value { color:#159b68; font-size:20px; font-weight:900; text-align:right; }
+      @media(max-width:700px) { .report-match-card { align-items:flex-start; flex-direction:column; } .report-performance-panel .metric-row { grid-template-columns:1fr 70px; gap:8px; } .report-performance-panel .metric-bar-area { grid-column:1/-1; } }
       .report-controls { display:flex; flex-wrap:wrap; gap:16px; align-items:end; margin:16px 0; }
       .report-controls .form-group { min-width:230px; }
       @media(max-width:700px) { .redzone-summary { grid-template-columns:repeat(2,minmax(0,1fr)); } }
@@ -1086,7 +1086,8 @@ ui <- page_fluid(
       class = "reports-link",
       actionButton(
         "reports_nav",
-        label = tagList(icon("file-text"), span("REPORTS")),
+        label = "REPORTS",
+        icon = icon("file-text"),
         class = "reports-nav-button"
       )
     )
@@ -1122,7 +1123,7 @@ server <- function(input, output, session) {
   show_athletes <- reactiveVal(FALSE)
   selected_athlete <- reactiveVal(NULL)
   show_reports <- reactiveVal(FALSE)
-  report_selected_file <- reactiveVal(NULL)
+  selected_report_file <- reactiveVal(NULL)
 
   matches <- reactive({
 
@@ -1282,24 +1283,9 @@ server <- function(input, output, session) {
   )
 
   observeEvent(input$reports_nav, {
-    if (show_reports()) {
-      show_reports(FALSE)
-      report_selected_file(NULL)
-    } else {
-      show_reports(TRUE)
-      report_selected_file(NULL)
-    }
+    show_reports(!show_reports())
     show_athletes(FALSE)
     selected_athlete(NULL)
-  })
-
-  observeEvent(input$report_match_click, {
-    req(input$report_match_click)
-    report_selected_file(as.character(input$report_match_click))
-  })
-
-  observeEvent(input$report_back_to_list, {
-    report_selected_file(NULL)
   })
 
   observeEvent(input$athlete_back, {
@@ -1330,17 +1316,19 @@ server <- function(input, output, session) {
     }
 
     if (show_reports()) {
-      if (is.null(report_selected_file())) {
+      if (is.null(selected_report_file())) {
         return(tagList(
-          h2("Match Reports"),
-          p(class = "section-intro", "Select a match to open its report. Reports are ordered newest first; point-by-point detail is included only for the Red Zone sequence."),
-          uiOutput("report_match_list_ui")
+          div(class = "reports-page-heading",
+            h2("Match Reports"),
+            p(class = "section-intro", "Select a match to open its performance report.")
+          ),
+          uiOutput("report_matches_ui")
         ))
       }
       return(tagList(
-        div(class="no-print report-detail-toolbar",
-          actionButton("report_back_to_list", "Back to all matches", icon=icon("arrow-left"), class="btn btn-outline-primary"),
-          uiOutput("report_controls_ui")
+        div(class = "no-print report-back-row",
+          actionButton("back_to_reports", "All Matches", icon = icon("arrow-left"), class = "btn-default"),
+          actionButton("print_report_btn", "Print / Save as PDF", icon = icon("print"), class = "btn-primary")
         ),
         div(id = "printable-report", uiOutput("print_report_ui"))
       ))
@@ -1667,7 +1655,7 @@ server <- function(input, output, session) {
             tags$thead(tags$tr(tags$th("#"), tags$th("Huskies"), tags$th("Score"), tags$th(m$opponent))),
             tags$tbody(lapply(seq_len(nrow(st$points)), function(i) {
               p <- st$points[i,]
-              cls <- if (nzchar(p$error_type)) "redzone-error-row" else if (is_redzone_good(p$huskies_event)) "redzone-good-row" else ""
+              cls <- if (nzchar(p$error_type)) "redzone-error-row" else ""
               tags$tr(class=cls,
                 tags$td(p$point_order),
                 tags$td(if (nzchar(p$huskies_event)) p$huskies_event else ""),
@@ -1695,33 +1683,34 @@ server <- function(input, output, session) {
 
   `%||%` <- function(x, y) if (is.null(x) || !length(x) || is.na(x[1])) y else x
 
-  output$report_match_list_ui <- renderUI({
+  output$report_matches_ui <- renderUI({
     ms <- matches()
-    if (!length(ms)) return(p("No match workbooks are available."))
-    # Matches are already sorted newest first by load_matches().
-    div(class="report-match-list", lapply(ms, function(m) {
-      d <- if (is.na(m$date)) "Date unknown" else format(m$date, "%B %d, %Y")
+    if (!length(ms)) return(div(class="placeholder-panel", "No match workbooks are available."))
+    tagList(lapply(seq_along(ms), function(i) {
+      m <- ms[[i]]
+      d <- if (is.na(m$date)) "Date unknown" else format(m$date, "%b %d, %Y")
       result <- if (is.null(m$result) || !length(m$result) || is.na(m$result) || !nzchar(as.character(m$result))) "Result not recorded" else as.character(m$result)
-      tags$button(type="button", class="report-match-row",
-        onclick=sprintf("Shiny.setInputValue('report_match_click', %s, {priority:'event'});", jsonlite::toJSON(as.character(m$file), auto_unbox=TRUE)),
-        span(class="report-match-date", d),
-        span(class="report-match-opponent", m$opponent),
-        span(class="report-match-result", result, " · Open report ", icon("arrow-right"))
+      file_value <- as.character(m$file)
+      onclick <- sprintf("Shiny.setInputValue('report_open_match', %s, {priority: 'event'});", jsonlite::toJSON(file_value, auto_unbox=TRUE))
+      div(class="report-match-card",
+        div(class="report-match-copy",
+          div(class="report-match-date", d),
+          h3(m$opponent),
+          p(class="report-match-result", result)
+        ),
+        tags$button(type="button", class="report-match-open", onclick=onclick, "Open Report", icon("arrow-right"))
       )
     }))
   })
 
-  output$report_controls_ui <- renderUI({
-    ms <- matches()
-    target <- Filter(function(m) identical(m$file, report_selected_file()), ms)
-    if (!length(target)) return(NULL)
-    tagList(
-      radioButtons("report_type", "Report format",
-        choices=c("Full Match Report"="full", "Red Zone Report"="redzone"),
-        selected="full", inline=TRUE),
-      actionButton("print_report_btn", "Print / Save as PDF", icon=icon("print"), class="btn-primary")
-    )
+  observeEvent(input$back_to_reports, {
+    selected_report_file(NULL)
   })
+
+  observeEvent(input$report_open_match, {
+    req(input$report_open_match)
+    selected_report_file(as.character(input$report_open_match))
+  }, ignoreInit = TRUE)
 
   observeEvent(input$print_report_btn, {
     session$sendCustomMessage("printReport", list())
@@ -1730,8 +1719,8 @@ server <- function(input, output, session) {
   output$print_report_ui <- renderUI({
     ms <- matches()
     if (!length(ms)) return(h3("No match data available."))
-    target <- Filter(function(m) identical(m$file, report_selected_file()), ms)
-    if (!length(target)) return(p("Select a match from the Reports list to view its report."))
+    target <- Filter(function(m) identical(as.character(m$file), as.character(selected_report_file() %||% ms[[1]]$file)), ms)
+    if (!length(target)) target <- ms[1]
     m <- target[[1]]
     rz <- m$red_zone
     if (is.null(rz)) rz <- list(description="After Huskies reach 20", sets=list())
@@ -1742,7 +1731,7 @@ server <- function(input, output, session) {
           tags$thead(tags$tr(tags$th("#"), tags$th("Huskies"), tags$th("Score"), tags$th(m$opponent))),
           tags$tbody(lapply(seq_len(nrow(st$points)), function(i) {
             p <- st$points[i,]
-            tags$tr(class=if (nzchar(p$error_type)) "redzone-error-row" else if (is_redzone_good(p$huskies_event)) "redzone-good-row" else "",
+            tags$tr(class=if (nzchar(p$error_type)) "redzone-error-row" else "",
               tags$td(p$point_order), tags$td(p$huskies_event), tags$td(p$score), tags$td(p$opponent_event))
           }))
         )
@@ -1754,7 +1743,7 @@ server <- function(input, output, session) {
       )
     })
     d <- if (is.na(m$date)) "Date unknown" else format(m$date, "%B %d, %Y")
-    is_redzone_only <- identical(input$report_type, "redzone")
+    is_redzone_only <- FALSE
     match_summary <- if (is_redzone_only) NULL else tagList(
       h2("Match Summary"),
       tags$table(class="redzone-table",
@@ -1765,12 +1754,43 @@ server <- function(input, output, session) {
         )
       ),
       if (nrow(m$key)) tagList(
-        h2("Key Metrics"),
-        tags$table(class="redzone-table",
-          tags$thead(tags$tr(tags$th("Category"), tags$th("Metric"), tags$th("Value"))),
-          tags$tbody(lapply(seq_len(nrow(m$key)), function(i) {
-            tags$tr(tags$td(m$key$category[i]), tags$td(m$key$metric[i]), tags$td(fmt_value(m$key$metric[i], m$key$value[i])))
-          }))
+        div(class="report-performance-panel",
+          h2("KEY METRICS · PERFORMANCE PROFILE"),
+          p(class="section-intro", "Match performance by game phase, passing, key offensive and key defensive metrics."),
+          {
+            metric_group <- vapply(seq_len(nrow(m$key)), function(i) {
+              cat <- tolower(trimws(as.character(m$key$category[i])))
+              met <- tolower(trimws(as.character(m$key$metric[i])))
+              if (grepl("game phase", cat)) "GAME PHASE"
+              else if (grepl("passing", cat)) "PASSING"
+              else if (grepl("defensive|block|dig|conversion", paste(cat, met))) "KEY DEFENSIVE"
+              else if (grepl("offensive|attack", paste(cat, met))) "KEY OFFENSIVE"
+              else toupper(as.character(m$key$category[i]))
+            }, character(1))
+            group_order <- unique(metric_group)
+            tagList(lapply(group_order, function(group_name) {
+              g <- m$key[metric_group == group_name, , drop=FALSE]
+              div(class="metric-group",
+                div(class="metric-group-title", group_name),
+                lapply(seq_len(nrow(g)), function(i) {
+                  value <- suppressWarnings(as.numeric(g$value[i]))
+                  metric <- as.character(g$metric[i])
+                  is_eff <- grepl("eff", metric, ignore.case=TRUE)
+                  is_pct <- grepl("%", metric, fixed=TRUE)
+                  scaled <- if (is_eff) value else if (is_pct && abs(value) <= 1) value*100 else value
+                  denominator <- if (is_eff) 1 else 100
+                  width <- if (is.finite(scaled)) max(0,min(100, scaled / denominator * 100)) else 0
+                  lower <- grepl("aced %|error|disruption|opponent", metric, ignore.case=TRUE)
+                  label <- if (!is.finite(value)) "—" else if (is_eff) sprintf("%.3f", value) else paste0(sprintf("%.1f", scaled), "%")
+                  div(class="metric-row report-metric-row",
+                    div(class="metric-copy", div(class="metric-name", metric), div(class="metric-description", if (nzchar(as.character(g$description[i]))) as.character(g$description[i]) else " ")),
+                    div(class="metric-value", label),
+                    div(class="metric-bar-area", div(class="metric-track", div(class=paste("metric-fill", if (lower) "metric-bad" else "metric-good"), style=paste0("width:",width,"%"))))
+                  )
+                })
+              )
+            }))
+          }
         )
       ),
       if (nrow(m$attack)) tagList(
@@ -1790,7 +1810,7 @@ server <- function(input, output, session) {
       )
     )
     tagList(
-      h1(if (is_redzone_only) "Red Zone Report" else "Match Report"),
+      h1("Match Report"),
       h3(paste(d, "·", m$opponent)),
       if (!is_redzone_only) match_summary,
       h2("Red Zone · After Huskies reach 20"),
@@ -2559,7 +2579,9 @@ server <- function(input, output, session) {
       d <- d[!is.na(d[["Attack Type"]]) & nzchar(d[["Attack Type"]]), , drop = FALSE]
       d
     })
-    d <- dplyr::bind_rows(pieces)
+    pieces <- Filter(function(x) is.data.frame(x) && nrow(x) > 0, pieces)
+    if (!length(pieces)) return(data.frame())
+    d <- tryCatch(dplyr::bind_rows(pieces), error=function(e) data.frame())
     if (!nrow(d)) return(data.frame())
     d[["Previous Play"]][tolower(d[["Previous Play"]]) %in% c("first ball", "first-ball", "firstball")] <- "FB"
     d[["Previous Play"]][tolower(d[["Previous Play"]]) %in% c("trans", "transition attack")] <- "Transition"
@@ -2572,6 +2594,9 @@ server <- function(input, output, session) {
 
   attack_summary <- reactive({
     d <- attack_period_data()
+    if (!is.data.frame(d) || !nrow(d) || !all(c("Attack Type", "Previous Play", "Attempts", "Kills", "Error") %in% names(d))) return(data.frame())
+    d[["Attack Type"]] <- trimws(as.character(d[["Attack Type"]]))
+    d <- d[!is.na(d[["Attack Type"]]) & nzchar(d[["Attack Type"]]), , drop=FALSE]
     if (!nrow(d)) return(data.frame())
     types <- unique(d[["Attack Type"]])
     rows <- lapply(types, function(tp) {
@@ -2605,7 +2630,7 @@ server <- function(input, output, session) {
 
   output$attack_table <- renderTable({
     d <- attack_summary()
-    validate(need(nrow(d) > 0, "No attack detail found in the selected matches."))
+    validate(need(is.data.frame(d) && nrow(d) > 0, "No usable attack detail found. Check the Attack Detail worksheet column headers."))
 
     phase <- if (is.null(input$attack_phase_filter) || !nzchar(input$attack_phase_filter)) "All" else input$attack_phase_filter
     if (identical(phase, "FB")) {
