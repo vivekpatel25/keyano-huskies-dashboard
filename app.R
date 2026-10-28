@@ -978,7 +978,21 @@ ui <- page_fluid(
         }
       }
 
-      .reports-link { display:flex; align-items:center; gap:6px; margin-left:12px; }
+      .reports-link { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; margin-left:12px; min-width:64px; }
+      .reports-icon-button { border:0; background:transparent; color:#17324d; padding:5px 10px 0; box-shadow:none !important; }
+      .reports-icon-button:hover, .reports-icon-button:focus { color:#2F75B5 !important; background:transparent !important; }
+      .reports-link .athletes-label { font-size:10px; letter-spacing:.08em; font-weight:800; color:#7a8794; }
+      .report-full-section { margin:26px 0; }
+      .report-data-table { width:100%; border-collapse:collapse; background:#fff; }
+      .report-data-table th,.report-data-table td { padding:9px 11px; border-bottom:1px solid #dce5ed; text-align:left; vertical-align:middle; }
+      .report-data-table th { color:#52677b; border-bottom:2px solid #17324d; font-weight:800; }
+      .report-data-table tbody tr:nth-child(even) td { background:#f0f3f6; }
+      .report-title-block { padding:8px 0 16px; border-bottom:1px solid #d8e2ec; margin-bottom:20px; }
+      .report-title-block h1 { margin:0 0 5px; }
+      .report-title-block h3 { margin:0 0 6px; color:#718397; font-weight:500; }
+      .redzone-good-row td { background:#e8f7ef !important; color:#14784f; font-weight:700; }
+      .report-full-section .analytics-section { margin-top:0; }
+      @media print { .report-full-section { break-inside:auto; } .report-data-table tr,.skill-card,.passing-player-card { break-inside:avoid; } }
       .reports-nav-button { border:0; background:transparent; color:#17324d; font-weight:800; }
       .reports-nav-button:hover, .reports-nav-button:focus { color:#2F75B5 !important; }
       .redzone-match-card { background:#fff; border:1px solid #d8e2ec; border-radius:12px; padding:16px; margin:14px 0; break-inside:avoid; }
@@ -1086,10 +1100,11 @@ ui <- page_fluid(
       class = "reports-link",
       actionButton(
         "reports_nav",
-        label = "REPORTS",
+        label = NULL,
         icon = icon("file-text"),
-        class = "reports-nav-button"
-      )
+        class = "reports-icon-button"
+      ),
+      div("REPORTS", class = "athletes-label")
     )
   ),
 
@@ -1719,102 +1734,200 @@ server <- function(input, output, session) {
   output$print_report_ui <- renderUI({
     ms <- matches()
     if (!length(ms)) return(h3("No match data available."))
-    target <- Filter(function(m) identical(as.character(m$file), as.character(selected_report_file() %||% ms[[1]]$file)), ms)
+    target <- Filter(function(x) identical(as.character(x$file), as.character(selected_report_file() %||% ms[[1]]$file)), ms)
     if (!length(target)) target <- ms[1]
     m <- target[[1]]
     rz <- m$red_zone
     if (is.null(rz)) rz <- list(description="After Huskies reach 20", sets=list())
+    d <- if (is.na(m$date)) "Date unknown" else format(m$date, "%b %d, %Y")
 
+    esc_num <- function(x, digits=0) {
+      z <- suppressWarnings(as.numeric(x))
+      if (!length(z) || !is.finite(z[1])) return("—")
+      if (digits == 0) format(round(z[1]), scientific=FALSE, trim=TRUE) else sprintf(paste0("%.",digits,"f"), z[1])
+    }
+    section <- function(title, subtitle, content) div(class="analytics-section report-full-section",
+      h2(title), p(class="section-intro", subtitle), content)
+    table_html <- function(headers, rows, class="report-data-table") {
+      tags$div(class="table-responsive", tags$table(class=class,
+        tags$thead(tags$tr(lapply(headers, tags$th))),
+        tags$tbody(rows)))
+    }
+    metric_ui <- function() {
+      k <- m$key
+      if (is.null(k) || !nrow(k)) return(div(class="placeholder-panel", "No Key Metrics data found in this workbook."))
+      groups <- vapply(seq_len(nrow(k)), function(i) {
+        cat <- tolower(trimws(as.character(k$category[i]))); met <- tolower(trimws(as.character(k$metric[i])))
+        if (grepl("game phase", cat)) "GAME PHASE" else if (grepl("passing", cat)) "PASSING" else if (grepl("defensive|block|dig|conversion", paste(cat,met))) "KEY DEFENSIVE" else if (grepl("offensive|attack", paste(cat,met))) "KEY OFFENSIVE" else toupper(as.character(k$category[i]))
+      }, character(1))
+      tagList(lapply(unique(groups), function(gname) {
+        g <- k[groups == gname,,drop=FALSE]
+        div(class="metric-group", div(class="metric-group-title",gname), lapply(seq_len(nrow(g)), function(i) {
+          v <- suppressWarnings(as.numeric(g$value[i])); met <- as.character(g$metric[i]); eff <- grepl("eff",met,ignore.case=TRUE); pct <- grepl("%",met,fixed=TRUE)
+          scaled <- if (eff) v else if (pct && abs(v)<=1) v*100 else v
+          maxv <- if (eff) 1 else 100; w <- if (is.finite(scaled)) max(0,min(100,scaled/maxv*100)) else 0
+          bad <- grepl("aced %|error|disruption|opponent",met,ignore.case=TRUE)
+          label <- if (!is.finite(v)) "—" else if (eff) sprintf("%.3f",v) else paste0(sprintf("%.1f",scaled),"%")
+          div(class="metric-row", div(class="metric-copy",div(class="metric-name",met),div(class="metric-description",ifelse(nzchar(as.character(g$description[i])),as.character(g$description[i])," "))), div(class="metric-value",label), div(class="metric-bar-area",div(class="metric-track",div(class=paste("metric-fill",if(bad) "metric-bad" else "metric-good"),style=paste0("width:",w,"%")))))
+        }))
+      }))
+    }
+    skill_ui <- function() {
+      sk <- m$skills
+      if (is.null(sk) || !nrow(sk)) return(div(class="placeholder-panel", "No By Skill data found in this workbook."))
+      palette <- c("#159B68", "#2F75B5", "#E5483B", "#E6A52B", "#7D9DB8", "#A9C8E2")
+      div(class="skill-cards-grid", lapply(unique(sk$skill), function(sn) {
+        z <- sk[sk$skill == sn, , drop=FALSE]
+        z$value <- suppressWarnings(as.numeric(z$value))
+        z <- z[is.finite(z$value), , drop=FALSE]
+        if (!nrow(z)) return(NULL)
+        total <- z$value[1]
+        pct <- grepl("%", z$metric[1], fixed=TRUE)
+        center <- if (pct) paste0(round(ifelse(abs(total) <= 1, total*100, total)), "%") else esc_num(total)
+        legend_rows <- lapply(seq_len(nrow(z)), function(j) {
+          val_pct <- grepl("%", z$metric[j], fixed=TRUE)
+          val_label <- if (val_pct) paste0(round(ifelse(abs(z$value[j]) <= 1, z$value[j]*100, z$value[j])), "%") else ""
+          div(class="skill-legend-row",
+            span(class="skill-legend-swatch", style=paste0("background:", palette[(j-1) %% length(palette)+1])),
+            span(class="skill-legend-name", z$metric[j]),
+            span(class="skill-legend-pct", val_label),
+            span(class="skill-legend-count", esc_num(z$value[j]))
+          )
+        })
+        div(class="skill-card",
+          div(class="skill-card-header", span(toupper(sn)), span(toupper(z$metric[1]))),
+          div(class="skill-card-body",
+            div(class="skill-donut-wrap",
+              div(class="skill-donut", style=paste0("background:conic-gradient(",palette[1]," 0deg 180deg,",palette[2]," 180deg 270deg,",palette[3]," 270deg 315deg,",palette[4]," 315deg 360deg)"),
+                div(class="skill-donut-hole", div(class="skill-donut-value", center), div(class="skill-donut-label", toupper(z$metric[1])))
+              )
+            ),
+            div(class="skill-legend", legend_rows)
+          )
+        )
+      }))
+    }
+    attack_ui <- function() {
+      a <- m$attack
+      if (is.null(a)||!nrow(a)) return(div(class="placeholder-panel","No Attack Detail data found in this workbook."))
+      reqcols <- c("Attack Type","Previous Play","Attempts","Kills","Error")
+      if (!all(reqcols %in% names(a))) {
+        raw_rows <- lapply(seq_len(nrow(a)), function(i) {
+          tags$tr(lapply(names(a), function(nm) tags$td(as.character(a[[nm]][i]))))
+        })
+        return(table_html(names(a), raw_rows))
+      }
+      a[["Attack Type"]] <- trimws(as.character(a[["Attack Type"]])); a[["Previous Play"]] <- trimws(as.character(a[["Previous Play"]]))
+      types <- unique(a[["Attack Type"]][!is.na(a[["Attack Type"]]) & nzchar(a[["Attack Type"]])])
+      rows <- lapply(types,function(tp) { z<-a[a[["Attack Type"]]==tp,,drop=FALSE]; fb<-z[tolower(z[["Previous Play"]]) %in% c("fb","first ball","first-ball","firstball"),,drop=FALSE]; tr<-z[tolower(z[["Previous Play"]]) %in% c("transition","trans","transition attack"),,drop=FALSE]
+        sums<-function(q,col) sum(suppressWarnings(as.numeric(q[[col]])),na.rm=TRUE); fa<-sums(fb,"Attempts"); fk<-sums(fb,"Kills"); fe<-sums(fb,"Error"); ta<-sums(tr,"Attempts"); tk<-sums(tr,"Kills"); te<-sums(tr,"Error"); at<-fa+ta; kk<-fk+tk; ee<-fe+te; eff<-function(k,e,n) if(n>0)(k-e)/n else NA_real_
+        tags$tr(tags$td(tp),tags$td(esc_num(at)),tags$td(esc_num(kk)),tags$td(esc_num(ee)),tags$td(esc_num(eff(fk,fe,fa),3)),tags$td(esc_num(eff(tk,te,ta),3)),tags$td(esc_num(eff(kk,ee,at),3)))
+      })
+      table_html(c("Attack Type","Attempts","Kills","Errors","FB Eff.","Transition Eff.","Total Eff."),rows)
+    }
+    rotation_ui <- function() {
+      z <- m$rotation
+      if (is.null(z)||!nrow(z)) return(div(class="placeholder-panel","No Rotation Details data found in this workbook."))
+      headers <- names(z); rows <- lapply(seq_len(nrow(z)),function(i) tags$tr(lapply(headers,function(nm) { v<-z[[nm]][i]; numeric_col<-is.numeric(z[[nm]]); pct<-grepl("%",nm,fixed=TRUE); val<-if(is.na(v)) "—" else if(numeric_col && pct) paste0(round(as.numeric(v),1),"%") else if(numeric_col) esc_num(v) else as.character(v); tags$td(val) })))
+      table_html(headers,rows,"report-data-table rotation-report-table")
+    }
+    setting_ui <- function() {
+      rot <- m$rotation_setting
+      rot_table <- if (is.null(rot)||!nrow(rot)) p("No rotation setting totals found.") else table_html(names(rot),lapply(seq_len(nrow(rot)),function(i) tags$tr(lapply(names(rot),function(nm) tags$td(if(is.numeric(rot[[nm]])) esc_num(rot[[nm]][i]) else as.character(rot[[nm]][i]))))))
+      block <- function(dat,label) { if(is.null(dat)||!nrow(dat)) return(div(class="chart-card",h4(label),p("No data found."))); headers<-names(dat); rows<-lapply(seq_len(nrow(dat)),function(i) tags$tr(lapply(headers,function(nm) {v<-dat[[nm]][i]; tags$td(if(is.numeric(v)) if(grepl("%|Share|K%|E%",nm,ignore.case=TRUE)) paste0(sprintf("%.1f",ifelse(abs(v)<=1,v*100,v)),"%") else esc_num(v) else as.character(v))}))); div(class="chart-card",h4(label),table_html(headers,rows)) }
+      tagList(div(class="chart-card",h3("Rotation setting totals"),rot_table),fluidRow(column(6,block(m$fb_sets,"Who Sets · First Ball")),column(6,block(m$trans_sets,"Who Sets · Transition"))))
+    }
+    passing_ui <- function() {
+      z <- m$passing
+      if (is.null(z) || !nrow(z)) return(div(class="placeholder-panel", "No Passing by Contact Point data found in this workbook."))
+      needed <- c("Player No.", "Player Name", "Contact Point", "Total Pass", "Good Pass", "Aced")
+      if (!all(needed %in% names(z))) {
+        raw_rows <- lapply(seq_len(nrow(z)), function(i) {
+          tags$tr(lapply(names(z), function(nm) tags$td(as.character(z[[nm]][i]))))
+        })
+        return(table_html(names(z), raw_rows))
+      }
+      if (!"Position" %in% names(z)) z$Position <- ""
+      z <- z |>
+        mutate(`Total Pass`=suppressWarnings(as.numeric(`Total Pass`)),
+               `Good Pass`=suppressWarnings(as.numeric(`Good Pass`)),
+               Aced=suppressWarnings(as.numeric(Aced))) |>
+        group_by(`Player No.`, `Player Name`, Position, `Contact Point`) |>
+        summarise(Passes=sum(`Total Pass`,na.rm=TRUE), Good=sum(`Good Pass`,na.rm=TRUE), Aced=sum(Aced,na.rm=TRUE), .groups="drop")
+      div(class="passing-player-grid", lapply(unique(z$`Player Name`), function(nm) {
+        q <- z[z$`Player Name` == nm, , drop=FALSE]
+        total <- sum(q$Passes); good <- sum(q$Good); aced <- sum(q$Aced)
+        point_rows <- lapply(seq_len(nrow(q)), function(i) {
+          good_pct <- if (q$Passes[i] > 0) paste0(round(q$Good[i]/q$Passes[i]*100,1), "%") else "—"
+          tags$tr(tags$td(q[["Contact Point"]][i]), tags$td(esc_num(q$Passes[i])), tags$td(esc_num(q$Good[i])), tags$td(esc_num(q$Aced[i])), tags$td(good_pct))
+        })
+        div(class="passing-player-card",
+          div(class="passing-player-header", span(paste0("#", q$`Player No.`[1], " ", nm)), span(q$Position[1])),
+          div(class="chart-card",
+            div(class="metric-row", div(class="metric-copy", div(class="metric-name", "Good Pass %")),
+              div(class="metric-value", if (total > 0) paste0(round(good/total*100,1), "%") else "—"),
+              div(class="metric-bar-area", div(class="metric-track", div(class="metric-fill metric-good", style=paste0("width:", if (total > 0) good/total*100 else 0, "%"))))),
+            table_html(c("Contact Point", "Passes", "Good Pass", "Aced", "Good %"), point_rows)
+          ),
+          div(class="passing-player-footer", tags$strong(paste(total,"passes")), tags$strong(paste0(if(total>0) round(good/total*100,1) else 0,"% good")), tags$strong(paste(aced,"aced")))
+        )
+      }))
+    }
     set_blocks <- lapply(rz$sets, function(st) {
       rows <- if (nrow(st$points)) {
+        point_rows <- lapply(seq_len(nrow(st$points)), function(i) {
+          pp <- st$points[i, ]
+          event <- tolower(as.character(pp$huskies_event))
+          is_error <- nzchar(as.character(pp$error_type))
+          is_good <- grepl("fbk|d-s-k|ace|block|kill|(^|[^a-z])k([^a-z]|$)", event, ignore.case=TRUE)
+          cls <- if (is_error) "redzone-error-row" else if (is_good) "redzone-good-row" else ""
+          tags$tr(class=cls,
+            tags$td(pp$point_order),
+            tags$td(if (nzchar(as.character(pp$huskies_event))) as.character(pp$huskies_event) else "—"),
+            tags$td(pp$score),
+            tags$td(if (nzchar(as.character(pp$opponent_event))) as.character(pp$opponent_event) else "—")
+          )
+        })
         tags$table(class="redzone-table",
           tags$thead(tags$tr(tags$th("#"), tags$th("Huskies"), tags$th("Score"), tags$th(m$opponent))),
-          tags$tbody(lapply(seq_len(nrow(st$points)), function(i) {
-            p <- st$points[i,]
-            tags$tr(class=if (nzchar(p$error_type)) "redzone-error-row" else "",
-              tags$td(p$point_order), tags$td(p$huskies_event), tags$td(p$score), tags$td(p$opponent_event))
-          }))
+          tags$tbody(point_rows)
         )
       } else p("No point-by-point entries found in this set.")
       div(class="redzone-set-card",
-        h4(paste0("Set ", st$set_number, if (nzchar(st$opening_score)) paste0(" · ", st$opening_score) else "")),
+        h3(paste0("Set ", st$set_number, if (nzchar(st$opening_score)) paste0(" · ", st$opening_score) else "")),
         rows,
-        p(paste0("Serve errors: ", st$serve_errors, " · Attack errors: ", st$attack_errors, " · Block errors: ", st$block_errors))
+        p(paste0("Errors: Serve ", st$serve_errors, " · Attack ", st$attack_errors, " · Block ", st$block_errors))
       )
     })
-    d <- if (is.na(m$date)) "Date unknown" else format(m$date, "%B %d, %Y")
-    is_redzone_only <- FALSE
-    match_summary <- if (is_redzone_only) NULL else tagList(
-      h2("Match Summary"),
-      tags$table(class="redzone-table",
-        tags$tbody(
-          tags$tr(tags$th("Opponent"), tags$td(m$opponent)),
-          tags$tr(tags$th("Result"), tags$td(ifelse(is.na(m$result), "Not recorded", m$result))),
-          tags$tr(tags$th("Date"), tags$td(d))
-        )
-      ),
-      if (nrow(m$key)) tagList(
-        div(class="report-performance-panel",
-          h2("KEY METRICS · PERFORMANCE PROFILE"),
-          p(class="section-intro", "Match performance by game phase, passing, key offensive and key defensive metrics."),
-          {
-            metric_group <- vapply(seq_len(nrow(m$key)), function(i) {
-              cat <- tolower(trimws(as.character(m$key$category[i])))
-              met <- tolower(trimws(as.character(m$key$metric[i])))
-              if (grepl("game phase", cat)) "GAME PHASE"
-              else if (grepl("passing", cat)) "PASSING"
-              else if (grepl("defensive|block|dig|conversion", paste(cat, met))) "KEY DEFENSIVE"
-              else if (grepl("offensive|attack", paste(cat, met))) "KEY OFFENSIVE"
-              else toupper(as.character(m$key$category[i]))
-            }, character(1))
-            group_order <- unique(metric_group)
-            tagList(lapply(group_order, function(group_name) {
-              g <- m$key[metric_group == group_name, , drop=FALSE]
-              div(class="metric-group",
-                div(class="metric-group-title", group_name),
-                lapply(seq_len(nrow(g)), function(i) {
-                  value <- suppressWarnings(as.numeric(g$value[i]))
-                  metric <- as.character(g$metric[i])
-                  is_eff <- grepl("eff", metric, ignore.case=TRUE)
-                  is_pct <- grepl("%", metric, fixed=TRUE)
-                  scaled <- if (is_eff) value else if (is_pct && abs(value) <= 1) value*100 else value
-                  denominator <- if (is_eff) 1 else 100
-                  width <- if (is.finite(scaled)) max(0,min(100, scaled / denominator * 100)) else 0
-                  lower <- grepl("aced %|error|disruption|opponent", metric, ignore.case=TRUE)
-                  label <- if (!is.finite(value)) "—" else if (is_eff) sprintf("%.3f", value) else paste0(sprintf("%.1f", scaled), "%")
-                  div(class="metric-row report-metric-row",
-                    div(class="metric-copy", div(class="metric-name", metric), div(class="metric-description", if (nzchar(as.character(g$description[i]))) as.character(g$description[i]) else " ")),
-                    div(class="metric-value", label),
-                    div(class="metric-bar-area", div(class="metric-track", div(class=paste("metric-fill", if (lower) "metric-bad" else "metric-good"), style=paste0("width:",width,"%"))))
-                  )
-                })
-              )
-            }))
-          }
-        )
-      ),
-      if (nrow(m$attack)) tagList(
-        h2("Attack Summary by Type"),
-        tags$table(class="redzone-table",
-          tags$thead(tags$tr(tags$th("Attack Type"), tags$th("Attempts"), tags$th("Kills"), tags$th("Stuffed Attacks"), tags$th("Error"), tags$th("Eff."))),
-          tags$tbody(lapply(seq_len(nrow(m$attack)), function(i) {
-            a <- m$attack[i,]
-            tags$tr(tags$td(as.character(a$`Attack Type`[1])),
-              tags$td(if ("Attempts" %in% names(a)) a$Attempts[1] else ""),
-              tags$td(if ("Kills" %in% names(a)) a$Kills[1] else ""),
-              tags$td(if ("Stuffed Attacks" %in% names(a)) a$`Stuffed Attacks`[1] else ""),
-              tags$td(if ("Error" %in% names(a)) a$Error[1] else ""),
-              tags$td(if ("Eff." %in% names(a)) fmt_value("Eff.", a$`Eff.`[1]) else ""))
-          }))
-        )
-      )
+    redzone_totals <- c(
+      sum(vapply(rz$sets, function(st) st$serve_errors, numeric(1))),
+      sum(vapply(rz$sets, function(st) st$attack_errors, numeric(1))),
+      sum(vapply(rz$sets, function(st) st$block_errors, numeric(1)))
     )
     tagList(
-      h1("Match Report"),
-      h3(paste(d, "·", m$opponent)),
-      if (!is_redzone_only) match_summary,
-      h2("Red Zone · After Huskies reach 20"),
-      if (!length(rz$sets)) p(class="status-error", "This workbook does not contain Red Zone set sequences yet.") else tagList(set_blocks)
+      div(class="report-title-block",
+        h1("Most Recent Match"),
+        h3(paste(m$opponent, "·", d)),
+        div(class="report-match-result", ifelse(is.na(m$result), "Result not recorded", m$result)),
+        span(class="data-status", "MATCH DATA CONNECTED")
+      ),
+      section("KEY METRICS · PERFORMANCE PROFILE", "Grouped by game phase, passing, key offensive and defensive metrics. Bars use fixed scales for percentages and efficiency.", metric_ui()),
+      section("BY SKILL", "Attack, serving, reception, blocking, defense and other skill totals from the workbook.", skill_ui()),
+      section("ATTACK DETAIL", "First-ball and transition attack by attack type. Efficiency is (Kills − Errors) / Attempts.", div(class="chart-card", h3("ATTACK TYPE SUMMARY"), attack_ui())),
+      section("ROTATION DETAILS", "Serve, reception and rotation outcomes.", div(class="chart-card", rotation_ui())),
+      section("SETTING STATS", "Rotation distribution and who sets on first-ball and transition.", setting_ui()),
+      section("PASSING BY CONTACT POINT", "Reception outcomes by player and contact point.", passing_ui()),
+      section("RED ZONE", "Point-by-point pressure sequence after the Huskies reach 20. Positive Huskies outcomes are green; Huskies errors are red.",
+        tagList(
+          div(class="redzone-summary",
+            div(class="redzone-summary-card", span("Serve errors"), strong(redzone_totals[1])),
+            div(class="redzone-summary-card", span("Attack errors"), strong(redzone_totals[2])),
+            div(class="redzone-summary-card", span("Block errors"), strong(redzone_totals[3])),
+            div(class="redzone-summary-card", span("Total errors"), strong(sum(redzone_totals)))
+          ),
+          if (length(set_blocks)) tagList(set_blocks) else p(class="status-error", "This workbook does not contain Red Zone set sequences yet.")
+        )
+      )
     )
   })
 
