@@ -978,6 +978,36 @@ ui <- page_fluid(
         }
       }
 
+      /* Keep both navigation controls together at the far right of the main header. */
+      .dashboard-header {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) auto auto auto !important;
+        align-items: center !important;
+        column-gap: 22px !important;
+      }
+      .athletes-link, .reports-link {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        margin: 0 !important;
+        min-width: 64px;
+        justify-self: end;
+      }
+      .reports-link { grid-column: 4; }
+      .athletes-link { grid-column: 3; }
+      .reports-icon-button { min-width: 44px; }
+      @media(max-width:700px) {
+        .dashboard-header {
+          grid-template-columns: minmax(0, 1fr) auto auto !important;
+          column-gap: 10px !important;
+        }
+        .brand-area { grid-column: 1 / -1; }
+        .match-summary { grid-column: 1; }
+        .athletes-link { grid-column: 2; }
+        .reports-link { grid-column: 3; }
+      }
       .reports-link { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; margin-left:0; min-width:64px; }
       .reports-icon-button { border:0; background:transparent; color:#17324d; padding:5px 10px 0; box-shadow:none !important; }
       .reports-icon-button:hover, .reports-icon-button:focus { color:#2F75B5 !important; background:transparent !important; }
