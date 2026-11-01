@@ -2146,7 +2146,15 @@ server <- function(input, output, session) {
       } else {
         d <- d |> filter(player_key == canonical_player(sel$name))
       }
-      d
+      # Keep only the fields used by the athlete reception profile.
+      # Workbook-calculated percentage columns (e.g. GP %, Aced %) can be
+      # numeric in one match and text in another, causing bind_rows() to fail.
+      d |>
+        select(any_of(c(
+          "Player No.", "Player Name", "Contact Point",
+          "Total Pass", "Good Pass", "Aced",
+          "date", "opponent", "match_file", "player_key"
+        )))
     })
     out <- bind_rows(chunks)
     if (!nrow(out)) return(tibble())
