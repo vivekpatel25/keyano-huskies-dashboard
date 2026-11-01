@@ -2785,7 +2785,11 @@ server <- function(input, output, session) {
       d <- d[!is.na(d[["Attack Type"]]) & nzchar(d[["Attack Type"]]) &
                !is.na(d[["Previous Play"]]), , drop = FALSE]
       if (!nrow(d)) return(NULL)
-      d
+
+      # Keep only fields used by the period aggregation. Other workbook columns
+      # (for example efficiency) can be numeric in one match and text in another,
+      # which makes bind_rows() fail across multiple matches.
+      d[, c("Attack Type", "Previous Play", "Attempts", "Kills", "Error"), drop = FALSE]
     })
     pieces <- Filter(function(x) is.data.frame(x) && nrow(x) > 0, pieces)
     if (!length(pieces)) return(data.frame())
@@ -3232,7 +3236,11 @@ server <- function(input, output, session) {
         ) |>
         filter(!is.na(`Player No.`), nzchar(`Player No.`),
                !is.na(`Player Name`), nzchar(`Player Name`),
-               !is.na(`Contact Point`), nzchar(`Contact Point`))
+               !is.na(`Contact Point`), nzchar(`Contact Point`)) |>
+        # Drop workbook percentage columns here; they may be stored as text in
+        # some files and numeric in others. Period percentages are recalculated.
+        select(`Player No.`, `Player Name`, Position, `Contact Point`,
+               `Total Pass`, `Good Pass`, Aced)
     })
 
     d <- bind_rows(rows)
