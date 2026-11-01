@@ -2113,14 +2113,44 @@ server <- function(input, output, session) {
   athlete_reception_data <- reactive({
     sel <- selected_athlete(); req(sel)
     ms <- matches()
+
     chunks <- lapply(ms, function(m) {
       d <- m$passing
-      if (is.null(d) || !nrow(d) || !all(c("Player Name", "Contact Point") %in% names(d))) return(tibble())
-      d |>
-        mutate(player_key = canonical_player(`Player Name`), date = m$date, opponent = m$opponent, match_file = m$file) |>
-        filter(player_key == canonical_player(sel$name))
+      if (is.null(d) || !nrow(d)) return(tibble())
+      d <- as.data.frame(d, check.names = FALSE, stringsAsFactors = FALSE)
+      names(d) <- trimws(names(d))
+      required <- c("Player No.", "Player Name", "Contact Point", "Total Pass", "Good Pass", "Aced")
+      if (!all(required %in% names(d))) return(tibble())
+      fill_cols <- intersect(c("Player No.", "Player Name", "Position"), names(d))
+      if (length(fill_cols)) d <- tidyr::fill(as_tibble(d), all_of(fill_cols), .direction = "down")
+
+      d <- d |>
+        mutate(
+          `Player No.` = trimws(as.character(`Player No.`)),
+          `Player Name` = trimws(as.character(`Player Name`)),
+          `Contact Point` = trimws(as.character(`Contact Point`)),
+          `Total Pass` = suppressWarnings(as.numeric(`Total Pass`)),
+          `Good Pass` = suppressWarnings(as.numeric(`Good Pass`)),
+          Aced = suppressWarnings(as.numeric(Aced)),
+          date = m$date,
+          opponent = m$opponent,
+          match_file = m$file,
+          player_key = canonical_player(`Player Name`)
+        ) |>
+        filter(!is.na(`Contact Point`), nzchar(`Contact Point`))
+
+      jersey_match <- !is.na(sel$jersey) && nzchar(as.character(sel$jersey)) &&
+        any(d$`Player No.` == as.character(sel$jersey), na.rm = TRUE)
+      if (jersey_match) {
+        d <- d |> filter(`Player No.` == as.character(sel$jersey))
+      } else {
+        d <- d |> filter(player_key == canonical_player(sel$name))
+      }
+      d
     })
-    bind_rows(chunks)
+    out <- bind_rows(chunks)
+    if (!nrow(out)) return(tibble())
+    out
   })
 
   athlete_profile_name <- reactive({
@@ -2134,7 +2164,8 @@ server <- function(input, output, session) {
     is_setter <- identical(role, "Setter")
     is_libero <- identical(role, "Libero")
     is_oh <- identical(role, "Outside Hitter")
-    is_reception_role <- is_libero || is_oh
+    # Passing/reception is shown on every athlete profile; players without recorded receptions get a clear empty-state message.
+    is_reception_role <- TRUE
     is_attacker <- !is_setter && !is_libero
     tagList(
       div(class = "athlete-profile-wrap",
@@ -2144,9 +2175,15 @@ server <- function(input, output, session) {
           actionButton("athlete_back", "Back to Athletes", icon = icon("arrow-left"), class = "btn btn-outline-primary")
         ),
         if (is_setter) {
-          div(class = "athlete-profile-grid",
-            div(class = "athlete-profile-card athlete-profile-wide", h3("Setting Quality · Match by Match"), tableOutput("athlete_setting_table")),
-            div(class = "athlete-profile-card athlete-profile-wide", h3("Setter Attack / Dump · Match by Match"), tableOutput("athlete_dump_table"))
+          tagList(
+            div(class = "athlete-profile-grid",
+              div(class = "athlete-profile-card athlete-profile-wide", h3("Setting Quality · Match by Match"), tableOutput("athlete_setting_table")),
+              div(class = "athlete-profile-card athlete-profile-wide", h3("Setter Attack / Dump · Match by Match"), tableOutput("athlete_dump_table"))
+            ),
+            div(class = "athlete-profile-grid",
+              div(class = "athlete-profile-card athlete-profile-wide", h3("Passing by Contact Point"), uiOutput("athlete_passing_profile_ui")),
+              div(class = "athlete-profile-card athlete-profile-wide", h3("Reception by Match"), tableOutput("athlete_reception_matches_table"))
+            )
           )
         } else tagList(
           if (is_attacker) div(class = "athlete-profile-grid",
@@ -2716,78 +2753,73 @@ server <- function(input, output, session) {
   # Prepare attack rows from every workbook in the selected period. Counts are
   # summed by attack type and previous-play phase; efficiencies are recalculated
   # from the pooled counts rather than averaging match-level efficiencies.
+  normalize_attack_phase <- function(x) {
+    x <- tolower(trimws(as.character(x)))
+    ifelse(grepl("^(fb|first[ -]?ball)(\\b|$)", x), "FB",
+      ifelse(grepl("^(trans|transition)(\\b|$)", x), "Transition", NA_character_))
+  }
+
   attack_period_data <- reactive({
     selected_matches <- period_matches()
     req(length(selected_matches) > 0)
 
     pieces <- lapply(selected_matches, function(mm) {
       d <- mm$attack
-      if (is.null(d) || !nrow(d) || !("Attack Type" %in% names(d))) return(NULL)
-      d <- as.data.frame(d, stringsAsFactors = FALSE)
+      if (is.null(d) || !nrow(d)) return(NULL)
+      d <- as.data.frame(d, check.names = FALSE, stringsAsFactors = FALSE)
+      names(d) <- trimws(names(d))
+      if (!all(c("Attack Type", "Attempts", "Kills") %in% names(d))) return(NULL)
+      if (!"Error" %in% names(d) && "Errors" %in% names(d)) d$Error <- d$Errors
+      if (!"Error" %in% names(d)) d$Error <- 0
+      if (!"Previous Play" %in% names(d)) return(NULL)
+
       d[["Attack Type"]] <- trimws(as.character(d[["Attack Type"]]))
-      if ("Previous Play" %in% names(d)) {
-        d[["Previous Play"]] <- trimws(as.character(d[["Previous Play"]]))
-      } else {
-        d[["Previous Play"]] <- "FB"
-      }
-      # Workbook continuation rows leave Attack Type blank; carry the label down.
-      d[["Attack Type"]][d[["Attack Type"]] == ""] <- NA_character_
-      d[["Attack Type"]] <- tidyr::fill(tibble::tibble(x = d[["Attack Type"]]), x, .direction = "down")$x
+      d[["Attack Type"]][is.na(d[["Attack Type"]]) | !nzchar(d[["Attack Type"]])] <- NA_character_
+      d[["Attack Type"]] <- tidyr::fill(tibble(x = d[["Attack Type"]]), x, .direction = "down")$x
+      d[["Previous Play"]] <- normalize_attack_phase(d[["Previous Play"]])
+
       for (nm in c("Attempts", "Kills", "Error")) {
-        if (!nm %in% names(d)) d[[nm]] <- 0
-        d[[nm]] <- suppressWarnings(as.numeric(d[[nm]]))
+        d[[nm]] <- suppressWarnings(as.numeric(as.character(d[[nm]])))
         d[[nm]][!is.finite(d[[nm]])] <- 0
       }
-      d <- d[!is.na(d[["Attack Type"]]) & nzchar(d[["Attack Type"]]), , drop = FALSE]
+      d <- d[!is.na(d[["Attack Type"]]) & nzchar(d[["Attack Type"]]) &
+               !is.na(d[["Previous Play"]]), , drop = FALSE]
+      if (!nrow(d)) return(NULL)
       d
     })
     pieces <- Filter(function(x) is.data.frame(x) && nrow(x) > 0, pieces)
     if (!length(pieces)) return(data.frame())
-    d <- tryCatch(dplyr::bind_rows(pieces), error=function(e) data.frame())
-    if (!nrow(d)) return(data.frame())
-    d[["Previous Play"]][tolower(d[["Previous Play"]]) %in% c("first ball", "first-ball", "firstball")] <- "FB"
-    d[["Previous Play"]][tolower(d[["Previous Play"]]) %in% c("trans", "transition attack")] <- "Transition"
-    d
+    bind_rows(pieces)
   })
 
   attack_eff <- function(kills, errors, attempts) {
-    ifelse(is.finite(attempts) & attempts > 0, (kills - errors) / attempts, NA_real_)
+    if (length(attempts) == 0 || !is.finite(attempts) || attempts <= 0) return(NA_real_)
+    (kills - errors) / attempts
   }
 
   attack_summary <- reactive({
     d <- attack_period_data()
-    if (!is.data.frame(d) || !nrow(d) || !all(c("Attack Type", "Previous Play", "Attempts", "Kills", "Error") %in% names(d))) return(data.frame())
-    d[["Attack Type"]] <- trimws(as.character(d[["Attack Type"]]))
-    d <- d[!is.na(d[["Attack Type"]]) & nzchar(d[["Attack Type"]]), , drop=FALSE]
-    if (!nrow(d)) return(data.frame())
-    types <- unique(d[["Attack Type"]])
+    if (!is.data.frame(d) || !nrow(d)) return(data.frame())
+    types <- unique(as.character(d[["Attack Type"]]))
     rows <- lapply(types, function(tp) {
       z <- d[d[["Attack Type"]] == tp, , drop = FALSE]
-      fb <- z[tolower(z[["Previous Play"]]) %in% c("fb", "first ball", "first-ball", "firstball"), , drop = FALSE]
-      tr <- z[tolower(z[["Previous Play"]]) %in% c("transition", "trans", "transition attack"), , drop = FALSE]
+      fb <- z[z[["Previous Play"]] == "FB", , drop = FALSE]
+      tr <- z[z[["Previous Play"]] == "Transition", , drop = FALSE]
       sumcol <- function(dat, col) sum(dat[[col]], na.rm = TRUE)
       fb_a <- sumcol(fb, "Attempts"); fb_k <- sumcol(fb, "Kills"); fb_e <- sumcol(fb, "Error")
       tr_a <- sumcol(tr, "Attempts"); tr_k <- sumcol(tr, "Kills"); tr_e <- sumcol(tr, "Error")
       all_a <- fb_a + tr_a; all_k <- fb_k + tr_k; all_e <- fb_e + tr_e
       data.frame(
-        `Attack Type` = tp,
-        Attempts = all_a,
-        Kills = all_k,
-        Errors = all_e,
+        `Attack Type` = tp, Attempts = all_a, Kills = all_k, Errors = all_e,
         `FB Eff.` = attack_eff(fb_k, fb_e, fb_a),
         `Transition Eff.` = attack_eff(tr_k, tr_e, tr_a),
         `Total Eff.` = attack_eff(all_k, all_e, all_a),
-        `FB Attempts` = fb_a,
-        `FB Kills` = fb_k,
-        `FB Errors` = fb_e,
-        `Transition Attempts` = tr_a,
-        `Transition Kills` = tr_k,
-        `Transition Errors` = tr_e,
+        `FB Attempts` = fb_a, `FB Kills` = fb_k, `FB Errors` = fb_e,
+        `Transition Attempts` = tr_a, `Transition Kills` = tr_k, `Transition Errors` = tr_e,
         check.names = FALSE
       )
     })
-    out <- dplyr::bind_rows(rows)
-    out[order(match(out[["Attack Type"]], types)), , drop = FALSE]
+    bind_rows(rows)
   })
 
   output$attack_table <- renderTable({
@@ -3181,25 +3213,32 @@ server <- function(input, output, session) {
 
     rows <- lapply(selected_matches, function(match_data) {
       d <- match_data$passing
-      if (is.null(d) || !nrow(d)) return(NULL)
+      if (is.null(d) || !nrow(d)) return(tibble())
+      d <- as.data.frame(d, check.names = FALSE, stringsAsFactors = FALSE)
+      names(d) <- trimws(names(d))
       required <- c("Player No.", "Player Name", "Contact Point", "Total Pass", "Good Pass", "Aced")
-      if (!all(required %in% names(d))) return(NULL)
-      d
+      if (!all(required %in% names(d))) return(tibble())
+      if (!"Position" %in% names(d)) d$Position <- ""
+      d <- tidyr::fill(as_tibble(d), any_of(c("Player No.", "Player Name", "Position")), .direction = "down")
+      d |>
+        mutate(
+          `Player No.` = trimws(as.character(`Player No.`)),
+          `Player Name` = trimws(as.character(`Player Name`)),
+          Position = trimws(as.character(Position)),
+          `Contact Point` = trimws(as.character(`Contact Point`)),
+          `Total Pass` = suppressWarnings(as.numeric(as.character(`Total Pass`))),
+          `Good Pass` = suppressWarnings(as.numeric(as.character(`Good Pass`))),
+          Aced = suppressWarnings(as.numeric(as.character(Aced)))
+        ) |>
+        filter(!is.na(`Player No.`), nzchar(`Player No.`),
+               !is.na(`Player Name`), nzchar(`Player Name`),
+               !is.na(`Contact Point`), nzchar(`Contact Point`))
     })
-    d <- dplyr::bind_rows(rows)
-    validate(need(nrow(d) > 0, "No Passing by Contact Point data found for this period."))
-    if (!"Position" %in% names(d)) d$Position <- ""
 
-    d <- d |>
-      mutate(
-        `Player No.` = as.character(`Player No.`),
-        `Player Name` = trimws(as.character(`Player Name`)),
-        Position = as.character(Position),
-        `Contact Point` = trimws(as.character(`Contact Point`)),
-        `Total Pass` = suppressWarnings(as.numeric(`Total Pass`)),
-        `Good Pass` = suppressWarnings(as.numeric(`Good Pass`)),
-        Aced = suppressWarnings(as.numeric(Aced))
-      ) |>
+    d <- bind_rows(rows)
+    validate(need(nrow(d) > 0, "No usable Passing by Contact Point rows were found in the selected matches."))
+
+    d |>
       mutate(
         `Total Pass` = tidyr::replace_na(`Total Pass`, 0),
         `Good Pass` = tidyr::replace_na(`Good Pass`, 0),
@@ -3216,7 +3255,6 @@ server <- function(input, output, session) {
         `GP %` = ifelse(`Total Pass` > 0, `Good Pass` / `Total Pass`, NA_real_),
         `Aced %` = ifelse(`Total Pass` > 0, Aced / `Total Pass`, NA_real_)
       )
-    d
   })
 
   output$passing_cards_ui <- renderUI({
