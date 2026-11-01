@@ -776,6 +776,10 @@ ui <- page_fluid(
       #attack_table table tbody td:nth-child(n+5) {
         font-weight: 700 !important;
       }
+      #attack_table .attack-efficiency-table { width:100%; margin-bottom:0; }
+      #attack_table .attack-efficiency-table th { color:#52677a; font-size:11px; font-weight:800; text-transform:uppercase; white-space:nowrap; }
+      #attack_table .attack-efficiency-table td { vertical-align:middle; }
+      #attack_table .attack-efficiency-table td:nth-child(n+5) { font-weight:800; }
 
       .rotation-heatmap-wrap {
         width: 100%;
@@ -1560,7 +1564,7 @@ server <- function(input, output, session) {
               selected = "All", width = "190px"
             )
           ),
-          tableOutput("attack_table")
+          uiOutput("attack_table")
         ),
 
         div(
@@ -2834,41 +2838,64 @@ server <- function(input, output, session) {
     bind_rows(rows)
   })
 
-  output$attack_table <- renderTable({
+  output$attack_table <- renderUI({
     d <- attack_summary()
     validate(need(is.data.frame(d) && nrow(d) > 0, "No usable attack detail found. Check the Attack Detail worksheet column headers."))
 
     phase <- if (is.null(input$attack_phase_filter) || !nzchar(input$attack_phase_filter)) "All" else input$attack_phase_filter
     if (identical(phase, "FB")) {
       shown <- data.frame(
-        `Attack Type` = d[["Attack Type"]],
-        Attempts = d[["FB Attempts"]],
-        Kills = d[["FB Kills"]],
-        Errors = d[["FB Errors"]],
-        `FB Eff.` = d[["FB Eff."]],
-        check.names = FALSE
+        `Attack Type` = d[["Attack Type"]], Attempts = d[["FB Attempts"]],
+        Kills = d[["FB Kills"]], Errors = d[["FB Errors"]],
+        `FB Eff.` = d[["FB Eff."]], check.names = FALSE
       )
     } else if (identical(phase, "Transition")) {
       shown <- data.frame(
-        `Attack Type` = d[["Attack Type"]],
-        Attempts = d[["Transition Attempts"]],
-        Kills = d[["Transition Kills"]],
-        Errors = d[["Transition Errors"]],
-        `Transition Eff.` = d[["Transition Eff."]],
-        check.names = FALSE
+        `Attack Type` = d[["Attack Type"]], Attempts = d[["Transition Attempts"]],
+        Kills = d[["Transition Kills"]], Errors = d[["Transition Errors"]],
+        `Transition Eff.` = d[["Transition Eff."]], check.names = FALSE
       )
     } else {
       shown <- d[, c("Attack Type", "Attempts", "Kills", "Errors", "FB Eff.", "Transition Eff.", "Total Eff."), drop = FALSE]
     }
 
-    for (nm in intersect(c("Attempts", "Kills", "Errors"), names(shown))) {
-      shown[[nm]] <- ifelse(is.finite(shown[[nm]]), as.character(as.integer(round(shown[[nm]]))), "—")
+    # Fixed scale keeps colours comparable across Last Match, Previous, Last 5,
+    # Last 10 and Full Season rather than rescaling each period independently.
+    efficiency_fill <- function(x) {
+      if (!is.finite(x)) return("#F3F5F7")
+      stops <- c(-0.20, 0.10, 0.40, 0.60)
+      cols <- c("#F5D9D7", "#F7EBCB", "#DCEBD9", "#BFDCC5")
+      x <- max(min(x, max(stops)), min(stops))
+      j <- max(which(stops <= x)); if (j == length(stops)) return(cols[j])
+      a <- (x - stops[j]) / (stops[j + 1] - stops[j])
+      c1 <- grDevices::col2rgb(cols[j]); c2 <- grDevices::col2rgb(cols[j + 1])
+      grDevices::rgb((c1[1,1] + a * (c2[1,1] - c1[1,1]))/255,
+                     (c1[2,1] + a * (c2[2,1] - c1[2,1]))/255,
+                     (c1[3,1] + a * (c2[3,1] - c1[3,1]))/255)
     }
-    for (nm in intersect(c("FB Eff.", "Transition Eff.", "Total Eff."), names(shown))) {
-      shown[[nm]] <- ifelse(is.finite(shown[[nm]]), sprintf("%.3f", shown[[nm]]), "—")
-    }
-    shown
-  }, striped = TRUE, bordered = FALSE, hover = TRUE, spacing = "s", width = "100%", align = "l")
+    eff_cols <- intersect(c("FB Eff.", "Transition Eff.", "Total Eff."), names(shown))
+    headers <- lapply(names(shown), tags$th)
+    body_rows <- lapply(seq_len(nrow(shown)), function(i) {
+      cells <- lapply(names(shown), function(nm) {
+        value <- shown[[nm]][i]
+        if (nm %in% c("Attempts", "Kills", "Errors")) {
+          label <- if (is.finite(value)) as.character(as.integer(round(value))) else "—"
+          tags$td(label)
+        } else if (nm %in% eff_cols) {
+          label <- if (is.finite(value)) sprintf("%.3f", value) else "—"
+          fill <- efficiency_fill(as.numeric(value))
+          tags$td(label, style = paste0("background-color:", fill,
+            ";font-weight:800;text-align:center;border-radius:3px;"))
+        } else {
+          tags$td(as.character(value), style = "font-weight:700;")
+        }
+      })
+      tags$tr(cells)
+    })
+    tags$div(class = "table-responsive attack-efficiency-wrap",
+      tags$table(class = "table table-sm table-striped attack-efficiency-table",
+        tags$thead(tags$tr(headers)), tags$tbody(body_rows)))
+  })
 
 
   output$attack_type_selector <- renderUI({
