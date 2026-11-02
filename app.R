@@ -844,6 +844,16 @@ ui <- page_fluid(
       }
       .blocking-summary-table tbody th { font-weight:500; color:#29445D; white-space:nowrap; }
       .blocking-summary-table td { font-weight:700; color:#203448; }
+      .blocking-summary-table .blocking-attack-row,
+      .blocking-summary-table .blocking-attack-row th,
+      .blocking-summary-table .blocking-attack-row td {
+        background:#EEF2F5 !important; color:#75879A !important;
+        font-size:11px; font-weight:500; padding-top:5px; padding-bottom:5px;
+      }
+      .blocking-summary-table .blocking-attack-row th {
+        text-transform:uppercase; letter-spacing:.025em; white-space:nowrap;
+      }
+      .blocking-summary-table .blocking-attack-row td { text-align:left; }
       .blocking-summary-table td, .blocking-summary-table th { padding:7px 9px; border-color:#E1E8EE; }
       .blocking-summary-table .blocking-summary-emphasis th,
       .blocking-summary-table .blocking-summary-emphasis td { font-weight:800; }
@@ -3299,7 +3309,7 @@ server <- function(input, output, session) {
     }
 
     segment_header_cells <- list(tags$th("NET SEGMENT", scope = "col"))
-    attack_header_cells <- list(tags$th("OPPONENT ATTACK", scope = "row"))
+    attack_header_cells <- list(tags$th("OPPONENT ATTACK OPTIONS", scope = "row"))
     for (i in seq_len(nrow(d))) {
       segment_header_cells[[i + 1]] <- tags$th(
         toupper(as.character(d$net_segment[i])), scope = "col"
