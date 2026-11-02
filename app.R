@@ -1654,7 +1654,7 @@ server <- function(input, output, session) {
         div(
           class = "chart-card blocking-detail-card",
           uiOutput("blocking_notice"),
-          plotOutput("blocking_plot", height = 300),
+          plotOutput("blocking_plot", height = 390),
           uiOutput("blocking_table")
         )
       ),
@@ -3209,60 +3209,76 @@ server <- function(input, output, session) {
       ifelse(nzchar(d$attack_call), paste0("\n", d$attack_call), "")
     )
     d$segment_label <- factor(d$segment_label, levels = d$segment_label)
+    d$recorded_outcomes <- d$stuff_blocks + d$positive_touch + d$negative_touch
 
     plot_data <- bind_rows(
       transmute(d, segment_label, outcome = "Stuff block", count = stuff_blocks),
       transmute(d, segment_label, outcome = "Positive touch", count = positive_touch),
       transmute(d, segment_label, outcome = "Negative touch", count = negative_touch)
-    )
+    ) |>
+      filter(is.finite(count), count > 0)
     plot_data$outcome <- factor(
       plot_data$outcome,
       levels = c("Stuff block", "Positive touch", "Negative touch")
     )
 
-    totals <- d |> transmute(segment_label, total = opponent_attempts)
+    totals <- d |>
+      transmute(segment_label, opponent_attempts, recorded_outcomes)
+    max_outcomes <- max(c(1, totals$recorded_outcomes), na.rm = TRUE)
+    plot_top <- max_outcomes * 1.30
 
     ggplot(plot_data, aes(x = segment_label, y = count, fill = outcome)) +
-      geom_col(width = 0.72, colour = "white", linewidth = 0.35) +
+      geom_col(width = 0.86, colour = "white", linewidth = 0.65) +
+      geom_text(
+        aes(label = ifelse(count >= 2, as.character(round(count)), "")),
+        position = position_stack(vjust = 0.5),
+        colour = "white", fontface = "bold", size = 4.2
+      ) +
       geom_text(
         data = totals,
-        aes(x = segment_label, y = total, label = round(total)),
-        inherit.aes = FALSE, vjust = -0.35,
-        fontface = "bold", size = 5, colour = "#1F2D3A"
+        aes(x = segment_label, y = recorded_outcomes + max_outcomes * 0.07,
+            label = paste0("Opp. attacks: ", round(opponent_attempts))),
+        inherit.aes = FALSE, fontface = "bold", size = 3.8,
+        colour = "#1F2D3A"
       ) +
       geom_vline(xintercept = c(1.5, 2.5), linetype = "dashed",
-                 linewidth = 0.45, colour = "#B8CBD8") +
-      geom_hline(yintercept = 0, linewidth = 3, colour = "#344653") +
-      annotate("text", x = 2, y = -max(1, max(totals$total, na.rm = TRUE) * 0.10),
-               label = "NET  ·  HUSKIES BLOCKING", fontface = "bold",
-               colour = "#344653", size = 3.5) +
+                 linewidth = 0.55, colour = "#B8CBD8") +
+      geom_hline(yintercept = 0, linewidth = 3.2, colour = "#344653") +
+      annotate("text", x = 2, y = plot_top * 0.97,
+               label = "OPPONENT ATTACK", fontface = "bold",
+               colour = "#71879A", size = 3.1) +
+      annotate("text", x = 2, y = -max_outcomes * 0.085,
+               label = "HUSKIES NET", fontface = "bold",
+               colour = "#344653", size = 3.6) +
       scale_fill_manual(
         values = c(
-          "Stuff block" = "#199B65",
+          "Stuff block" = "#159B65",
           "Positive touch" = "#E3A21A",
           "Negative touch" = "#C94032"
         ),
         breaks = c("Stuff block", "Positive touch", "Negative touch")
       ) +
       scale_y_continuous(
-        expand = expansion(mult = c(0.12, 0.18)),
-        limits = c(-max(1, max(totals$total, na.rm = TRUE) * 0.13),
-                   max(1, max(totals$total, na.rm = TRUE) * 1.18))
+        expand = expansion(mult = c(0, 0)),
+        limits = c(-max_outcomes * 0.16, plot_top),
+        breaks = pretty(c(0, max_outcomes), n = 4)
       ) +
-      labs(x = NULL, y = NULL, fill = NULL) +
+      labs(x = NULL, y = NULL, fill = NULL,
+           caption = "Bars show the distribution of recorded block outcomes; opponent attacks are labelled above each segment.") +
       theme_minimal(base_size = 12) +
       theme(
         panel.grid.major.x = element_blank(),
         panel.grid.minor = element_blank(),
-        panel.grid.major.y = element_line(colour = "#E7EDF2"),
+        panel.grid.major.y = element_line(colour = "#E1EAF0", linewidth = 0.6),
         panel.background = element_rect(fill = "#EEF4F8", colour = "#D6E1E9", linewidth = 0.6),
         plot.background = element_rect(fill = "white", colour = NA),
-        axis.text.x = element_text(face = "bold", colour = "#243746", size = 11, lineheight = 1.05),
+        axis.text.x = element_text(face = "bold", colour = "#243746", size = 12, lineheight = 1.05),
         axis.text.y = element_blank(),
         axis.ticks = element_blank(),
         legend.position = "top",
-        legend.text = element_text(colour = "#243746", size = 10),
-        plot.margin = margin(12, 18, 12, 18)
+        legend.text = element_text(colour = "#243746", size = 11),
+        plot.caption = element_text(colour = "#71879A", size = 9, hjust = 0.5),
+        plot.margin = margin(16, 20, 8, 20)
       )
   }, res = 110)
 
@@ -3286,7 +3302,7 @@ server <- function(input, output, session) {
       } else sprintf("%.3f", row$opponent_attack_eff)
     }
 
-    header_cells <- list(tags$th("NET SEGMENT", scope = "col"))
+    header_cells <- list(tags$th("OPPONENT ATTACKS", scope = "col"))
     for (i in seq_len(nrow(d))) {
       header_cells[[i + 1]] <- tags$th(
         tags$div(toupper(as.character(d$net_segment[i]))),
