@@ -1744,9 +1744,7 @@ server <- function(input, output, session) {
             h4("Setter Setting Distribution · By Set Location"),
             uiOutput("setter_location_heading")
           ),
-          tableOutput("setter_location_table"),
-          p(class = "setting-data-note",
-            "All Locations indicates a match workbook that contains overall setting totals but no set-location breakdown.")
+          tableOutput("setter_location_table")
         )
       ),
 
@@ -2330,8 +2328,7 @@ server <- function(input, output, session) {
             div(class = "athlete-profile-grid",
               div(class = "athlete-profile-card athlete-profile-wide",
                   h3("Setting Distribution by Location · Match by Match"),
-                  tableOutput("athlete_setting_table"),
-                  p(class = "setting-data-note", "All Locations indicates an earlier match workbook without a set-location breakdown.")),
+                  tableOutput("athlete_setting_table")),
               div(class = "athlete-profile-card athlete-profile-wide", h3("Setter Attack / Dump · Match by Match"), tableOutput("athlete_dump_table"))
             ),
             div(class = "athlete-profile-grid",
@@ -2662,23 +2659,28 @@ server <- function(input, output, session) {
     )
     d$bar_value <- pmax(0, pmin(ifelse(d$is_eff, 1, 100), d$scale_value))
 
-    # Marker is the average of the matches immediately outside the selected window,
-    # when one exists. For Most Recent / Previous Match, this is the next older match.
+    # Use only the immediately preceding match outside the selected window.
+    # This is a single-game comparison marker, not an average of older matches.
     all_matches <- matches()
-    selected_files <- vapply(selected_matches, function(x) x$file, character(1))
-    older <- all_matches[!vapply(all_matches, function(x) x$file %in% selected_files, logical(1))]
-    comparison_match <- if (length(older)) older else NULL
+    selected_files <- vapply(selected_matches, function(x) as.character(x$file), character(1))
+    selected_positions <- which(vapply(all_matches, function(x) {
+      as.character(x$file) %in% selected_files
+    }, logical(1)))
+    comparison_match <- NULL
+    if (length(selected_positions)) {
+      last_selected_position <- max(selected_positions)
+      if (last_selected_position < length(all_matches)) {
+        comparison_match <- list(all_matches[[last_selected_position + 1]])
+      }
+    }
 
     comparison_mean <- function(metric_name) {
-      if (is.null(comparison_match)) return(NA_real_)
-      vals <- vapply(comparison_match, function(match_data) {
-        k <- match_data$key
-        if (is.null(k) || !nrow(k)) return(NA_real_)
-        hit <- which(trimws(k$metric) == trimws(metric_name))
-        if (!length(hit)) return(NA_real_)
-        suppressWarnings(as.numeric(k$value[hit[1]]))
-      }, numeric(1))
-      if (!any(is.finite(vals))) NA_real_ else mean(vals[is.finite(vals)])
+      if (is.null(comparison_match) || !length(comparison_match)) return(NA_real_)
+      k <- comparison_match[[1]]$key
+      if (is.null(k) || !nrow(k)) return(NA_real_)
+      hit <- which(trimws(k$metric) == trimws(metric_name))
+      if (!length(hit)) return(NA_real_)
+      suppressWarnings(as.numeric(k$value[hit[1]]))
     }
 
     groups_order <- c("GAME PHASE", "PASSING", "KEY OFFENSIVE", "KEY DEFENSIVE")
@@ -2695,8 +2697,14 @@ server <- function(input, output, session) {
           val_label <- if (r$is_eff) sprintf("%.3f", r$value) else paste0(sprintf("%.1f", r$scale_value), "%")
           cmp_value <- comparison_mean(r$metric)
           cmp_bar <- if (is.na(cmp_value)) NA_real_ else if (r$is_eff) cmp_value else if (r$is_pct && abs(cmp_value) <= 1) cmp_value * 100 else cmp_value
-          marker <- if (!is.na(cmp_bar) && is.finite(cmp_bar)) paste0("left:", max(0, min(100, cmp_bar / maxval * 100)), "%") else NULL
-          cmp_label <- if (is.null(comparison_match)) "" else paste(vapply(comparison_match, function(x) x$opponent, character(1)), collapse = "/")
+          # Comparison ticks are only shown for single-match views. For Last 5,
+          # Last 10 and Full Season, the bar itself represents the average across
+          # the selected period, so no separate comparison marker is displayed.
+          show_comparison_marker <- selected_period() %in% c("Most Recent Match", "Previous Match")
+          marker <- if (show_comparison_marker && !is.na(cmp_bar) && is.finite(cmp_bar)) {
+            paste0("left:", max(0, min(100, cmp_bar / maxval * 100)), "%")
+          } else NULL
+          cmp_label <- if (is.null(comparison_match) || !length(comparison_match)) "" else as.character(comparison_match[[1]]$opponent)
           div(class = "metric-row",
             div(class = "metric-copy",
               div(class = "metric-name", r$metric),
@@ -3122,6 +3130,11 @@ server <- function(input, output, session) {
     out <- d |>
       group_by(segment_order, net_segment) |>
       summarise(
+        attack_call = {
+          calls <- trimws(as.character(attack_call))
+          calls <- calls[!is.na(calls) & nzchar(calls)]
+          if (length(calls)) calls[1] else ""
+        },
         stuff_blocks = sum(stuff_blocks, na.rm = TRUE),
         positive_touch = sum(positive_touch, na.rm = TRUE),
         negative_touch = sum(negative_touch, na.rm = TRUE),
@@ -3136,8 +3149,6 @@ server <- function(input, output, session) {
 
     out |>
       mutate(
-        no_block = pmax(opponent_attempts - stuff_blocks -
-                          positive_touch - negative_touch, 0),
         block_impact = ifelse(
           opponent_attempts > 0,
           (stuff_blocks + positive_touch) / opponent_attempts,
@@ -3192,37 +3203,32 @@ server <- function(input, output, session) {
     d <- blocking_summary()
     validate(need(nrow(d) > 0, "No Blocking Detail data is available for this period."))
 
-    d$segment_label <- factor(
-      d$net_segment,
-      levels = d$net_segment[order(d$segment_order)]
+    d <- d[order(d$segment_order), , drop = FALSE]
+    d$segment_label <- paste0(
+      as.character(d$net_segment),
+      ifelse(nzchar(d$attack_call), paste0("\n", d$attack_call), "")
     )
-    d$segment_label <- factor(
-      as.character(d$segment_label),
-      levels = unique(as.character(d$segment_label))
-    )
+    d$segment_label <- factor(d$segment_label, levels = d$segment_label)
 
     plot_data <- bind_rows(
       transmute(d, segment_label, outcome = "Stuff block", count = stuff_blocks),
       transmute(d, segment_label, outcome = "Positive touch", count = positive_touch),
-      transmute(d, segment_label, outcome = "Negative touch", count = negative_touch),
-      transmute(d, segment_label, outcome = "No block", count = no_block)
+      transmute(d, segment_label, outcome = "Negative touch", count = negative_touch)
     )
     plot_data$outcome <- factor(
       plot_data$outcome,
-      levels = c("Stuff block", "Positive touch", "Negative touch", "No block")
+      levels = c("Stuff block", "Positive touch", "Negative touch")
     )
 
-    totals <- d |>
-      group_by(segment_label) |>
-      summarise(total = sum(opponent_attempts, na.rm = TRUE), .groups = "drop")
+    totals <- d |> transmute(segment_label, total = opponent_attempts)
 
     ggplot(plot_data, aes(x = segment_label, y = count, fill = outcome)) +
       geom_col(width = 0.72, colour = "white", linewidth = 0.35) +
       geom_text(
         data = totals,
         aes(x = segment_label, y = total, label = round(total)),
-        inherit.aes = FALSE,
-        vjust = -0.35, fontface = "bold", size = 5, colour = "#1F2D3A"
+        inherit.aes = FALSE, vjust = -0.35,
+        fontface = "bold", size = 5, colour = "#1F2D3A"
       ) +
       geom_vline(xintercept = c(1.5, 2.5), linetype = "dashed",
                  linewidth = 0.45, colour = "#B8CBD8") +
@@ -3234,10 +3240,9 @@ server <- function(input, output, session) {
         values = c(
           "Stuff block" = "#199B65",
           "Positive touch" = "#E3A21A",
-          "Negative touch" = "#C94032",
-          "No block" = "#8296A5"
+          "Negative touch" = "#C94032"
         ),
-        breaks = c("Stuff block", "Positive touch", "Negative touch", "No block")
+        breaks = c("Stuff block", "Positive touch", "Negative touch")
       ) +
       scale_y_continuous(
         expand = expansion(mult = c(0.12, 0.18)),
@@ -3252,7 +3257,7 @@ server <- function(input, output, session) {
         panel.grid.major.y = element_line(colour = "#E7EDF2"),
         panel.background = element_rect(fill = "#EEF4F8", colour = "#D6E1E9", linewidth = 0.6),
         plot.background = element_rect(fill = "white", colour = NA),
-        axis.text.x = element_text(face = "bold", colour = "#243746", size = 11),
+        axis.text.x = element_text(face = "bold", colour = "#243746", size = 11, lineheight = 1.05),
         axis.text.y = element_blank(),
         axis.ticks = element_blank(),
         legend.position = "top",
@@ -3266,37 +3271,39 @@ server <- function(input, output, session) {
     validate(need(nrow(d) > 0, ""))
     d <- d[order(d$segment_order), , drop = FALSE]
 
-    rate_or_count <- function(count, attempts) {
-      if (!is.finite(attempts) || attempts <= 0) return("—")
-      if (attempts < 25) {
-        paste0(round(count), " of ", round(attempts))
-      } else {
-        paste0(round(count / attempts * 100), "%  ", round(count))
-      }
+    count_label <- function(count) {
+      if (!is.finite(count)) "—" else as.character(round(count))
     }
     impact_label <- function(row) {
       n <- row$opponent_attempts
-      numerator <- row$stuff_blocks + row$positive_touch
       if (!is.finite(n) || n <= 0) return("—")
-      if (n < 25) paste0(round(numerator), " of ", round(n))
-      else paste0(round(row$block_impact * 100, 1), "%")
+      paste0(sprintf("%.1f", row$block_impact * 100), "%")
     }
     eff_label <- function(row) {
-      if (!is.finite(row$opponent_attack_eff) || row$opponent_attempts < 25) return("—")
+      if (!is.finite(row$opponent_attack_eff)) return("—")
       if (abs(row$opponent_attack_eff) < 1) {
         sub("^0", "", sprintf("%.3f", row$opponent_attack_eff))
       } else sprintf("%.3f", row$opponent_attack_eff)
     }
 
-    segment_names <- as.character(d$net_segment)
-    headers <- c("NET SEGMENT", toupper(segment_names))
-    header_row <- tags$tr(lapply(headers, tags$th))
+    header_cells <- list(tags$th("NET SEGMENT", scope = "col"))
+    for (i in seq_len(nrow(d))) {
+      header_cells[[i + 1]] <- tags$th(
+        tags$div(toupper(as.character(d$net_segment[i]))),
+        tags$small(
+          as.character(d$attack_call[i]),
+          style = "display:block;font-weight:500;text-transform:none;color:#71879a;margin-top:3px;"
+        ),
+        scope = "col"
+      )
+    }
+    header_row <- tags$tr(header_cells)
+
     metric_rows <- list(
       list(label = "Attacks faced", values = as.character(round(d$opponent_attempts))),
-      list(label = "Stuff block", values = mapply(rate_or_count, d$stuff_blocks, d$opponent_attempts)),
-      list(label = "Positive touch", values = mapply(rate_or_count, d$positive_touch, d$opponent_attempts)),
-      list(label = "Negative touch", values = mapply(rate_or_count, d$negative_touch, d$opponent_attempts)),
-      list(label = "No block", values = mapply(rate_or_count, d$no_block, d$opponent_attempts)),
+      list(label = "Stuff block", values = vapply(d$stuff_blocks, count_label, character(1))),
+      list(label = "Positive touch", values = vapply(d$positive_touch, count_label, character(1))),
+      list(label = "Negative touch", values = vapply(d$negative_touch, count_label, character(1))),
       list(label = "Block Impact %", values = vapply(seq_len(nrow(d)), function(i) impact_label(d[i, ]), character(1))),
       list(label = "Opponent Attack Eff.", values = vapply(seq_len(nrow(d)), function(i) eff_label(d[i, ]), character(1)))
     )
@@ -3304,7 +3311,7 @@ server <- function(input, output, session) {
       r <- metric_rows[[i]]
       cells <- c(list(tags$th(r$label, scope = "row")),
                  lapply(r$values, function(v) tags$td(v)))
-      tags$tr(cells, class = if (i %in% c(1, 6, 7)) "blocking-summary-emphasis" else NULL)
+      tags$tr(cells, class = if (i %in% c(1, 5, 6)) "blocking-summary-emphasis" else NULL)
     })
 
     div(
@@ -3315,7 +3322,8 @@ server <- function(input, output, session) {
         tags$tbody(body)
       ),
       div(class = "blocking-footnote",
-        "Segments with fewer than 25 opponent attacks show counts instead of rates; opponent attack efficiency is suppressed for those segments."
+        tags$strong("Block Impact %"),
+        tags$span(" = (Stuff Blocks + Positive Touches) / Opp Attacks")
       )
     )
   })
