@@ -1737,6 +1737,16 @@ server <- function(input, output, session) {
               tableOutput("trans_table")
             )
           )
+        ),
+        div(
+          class = "chart-card table-wrap setting-stats-card",
+          div(class = "setting-stats-heading",
+            h4("Setter Setting Distribution · By Set Location"),
+            uiOutput("setter_location_heading")
+          ),
+          tableOutput("setter_location_table"),
+          p(class = "setting-data-note",
+            "All Locations indicates a match workbook that contains overall setting totals but no set-location breakdown.")
         )
       ),
 
@@ -2143,23 +2153,69 @@ server <- function(input, output, session) {
       setting <- tibble()
       dump <- tibble()
       if (nrow(raw_setter) >= 2) {
-        setting_header <- trimws(as.character(unlist(raw_setter[1, ], use.names = FALSE)))
-        setting_header[is.na(setting_header) | setting_header == ""] <- paste0("X", which(is.na(setting_header) | setting_header == ""))
-        setting_row <- which(!is.na(raw_setter[[1]]) & trimws(as.character(raw_setter[[1]])) != "" & trimws(as.character(raw_setter[[1]])) != "Player Name")[1]
-        if (length(setting_row) && !is.na(setting_row)) {
-          setting <- as_tibble(raw_setter[setting_row, seq_len(min(7, ncol(raw_setter)))])
-          names(setting) <- setting_header[seq_len(ncol(setting))]
-          setting <- setting |>
-            mutate(`Player Name` = trimws(as.character(`Player Name`)), date = m$date, opponent = m$opponent, match_file = m$file)
+        cell_text <- function(r) trimws(as.character(unlist(raw_setter[r, , drop = FALSE], use.names = FALSE)))
+        setting_header_row <- which(vapply(seq_len(nrow(raw_setter)), function(r) {
+          vals <- cell_text(r)
+          any(vals == "Set Location", na.rm = TRUE) &&
+            any(vals == "Positive Sets", na.rm = TRUE) &&
+            any(vals == "Total Attempts", na.rm = TRUE)
+        }, logical(1)))[1]
+
+        if (length(setting_header_row) && !is.na(setting_header_row)) {
+          setting_header <- cell_text(setting_header_row)
+          setting_header[is.na(setting_header) | setting_header == ""] <- paste0("X", which(is.na(setting_header) | setting_header == ""))
+          setting_header <- make.unique(setting_header)
+          setting_end_candidates <- which(vapply(seq_len(nrow(raw_setter)), function(r) {
+            r > setting_header_row && any(cell_text(r) == "Attempts", na.rm = TRUE)
+          }, logical(1)))
+          setting_end <- if (length(setting_end_candidates)) setting_end_candidates[1] - 1 else nrow(raw_setter)
+          setting_rows <- if (setting_end > setting_header_row) seq.int(setting_header_row + 1, setting_end) else integer()
+          if (length(setting_rows)) {
+            setting <- as_tibble(raw_setter[setting_rows, seq_len(length(setting_header))])
+            names(setting) <- setting_header
+            setting <- setting |>
+              mutate(
+                `Player Name` = na_if(trimws(as.character(`Player Name`)), ""),
+                `Set Location` = trimws(as.character(`Set Location`))
+              ) |>
+              tidyr::fill(`Player Name`, .direction = "down") |>
+              filter(!is.na(`Player Name`), !is.na(`Set Location`), nzchar(`Set Location`)) |>
+              select(any_of(c("Player Name", "Set Location", "Positive Sets", "Off Sets", "Poor Sets",
+                              "Setting Errors", "Total Attempts", "Positive Sets %")))
+          }
+        } else {
+          # Backward compatibility with earlier one-row Setter sheets.
+          setting_header <- cell_text(1)
+          setting_header[is.na(setting_header) | setting_header == ""] <- paste0("X", which(is.na(setting_header) | setting_header == ""))
+          setting_row <- which(!is.na(raw_setter[[1]]) & trimws(as.character(raw_setter[[1]])) != "" & trimws(as.character(raw_setter[[1]])) != "Player Name")[1]
+          if (length(setting_row) && !is.na(setting_row)) {
+            setting <- as_tibble(raw_setter[setting_row, seq_len(min(7, ncol(raw_setter)))])
+            names(setting) <- setting_header[seq_len(ncol(setting))]
+            setting <- setting |>
+              mutate(`Player Name` = trimws(as.character(`Player Name`)),
+                     `Set Location` = "All Locations") |>
+              select(any_of(c("Player Name", "Set Location", "Positive Sets", "Off Sets", "Poor Sets",
+                              "Setting Errors", "Total Attempts", "Positive Sets %")))
+          }
         }
-        dump_header_row <- which(vapply(seq_len(nrow(raw_setter)), function(r) any(trimws(as.character(unlist(raw_setter[r, ], use.names = FALSE))) == "Attempts", na.rm = TRUE), logical(1)))[1]
+
+        if (nrow(setting)) {
+          for (nm in intersect(c("Positive Sets", "Off Sets", "Poor Sets", "Setting Errors", "Total Attempts", "Positive Sets %"), names(setting))) {
+            setting[[nm]] <- suppressWarnings(as.numeric(as.character(setting[[nm]])))
+          }
+          setting <- setting |>
+            mutate(date = m$date, opponent = m$opponent, match_file = m$file)
+        }
+
+        dump_header_row <- which(vapply(seq_len(nrow(raw_setter)), function(r) any(cell_text(r) == "Attempts", na.rm = TRUE), logical(1)))[1]
         if (length(dump_header_row) && !is.na(dump_header_row) && dump_header_row < nrow(raw_setter)) {
-          dump_header <- trimws(as.character(unlist(raw_setter[dump_header_row, ], use.names = FALSE)))
+          dump_header <- cell_text(dump_header_row)
           dump_header <- dump_header[seq_len(min(6, ncol(raw_setter)))]
+          dump_header[is.na(dump_header) | dump_header == ""] <- paste0("X", which(is.na(dump_header) | dump_header == ""))
           dump_row <- dump_header_row + 1
           if (!is.na(raw_setter[[1]][dump_row]) && trimws(as.character(raw_setter[[1]][dump_row])) != "") {
             dump <- as_tibble(raw_setter[dump_row, seq_len(length(dump_header))])
-            names(dump) <- dump_header
+            names(dump) <- make.unique(dump_header)
             dump <- dump |>
               mutate(`Player Name` = trimws(as.character(`Player Name`)), date = m$date, opponent = m$opponent, match_file = m$file)
           }
@@ -2272,7 +2328,10 @@ server <- function(input, output, session) {
         if (is_setter) {
           tagList(
             div(class = "athlete-profile-grid",
-              div(class = "athlete-profile-card athlete-profile-wide", h3("Setting Quality · Match by Match"), tableOutput("athlete_setting_table")),
+              div(class = "athlete-profile-card athlete-profile-wide",
+                  h3("Setting Distribution by Location · Match by Match"),
+                  tableOutput("athlete_setting_table"),
+                  p(class = "setting-data-note", "All Locations indicates an earlier match workbook without a set-location breakdown.")),
               div(class = "athlete-profile-card athlete-profile-wide", h3("Setter Attack / Dump · Match by Match"), tableOutput("athlete_dump_table"))
             ),
             div(class = "athlete-profile-grid",
@@ -2490,22 +2549,38 @@ server <- function(input, output, session) {
     rows <- lapply(athlete_match_data(), function(x) {
       d <- x$setting
       if (!nrow(d) || !"Player Name" %in% names(d)) return(tibble())
-      d |> mutate(player_key=canonical_player(`Player Name`)) |> filter(player_key==canonical_player(sel$name))
+      d |>
+        mutate(player_key = canonical_player(`Player Name`)) |>
+        filter(player_key == canonical_player(sel$name))
     })
     d <- bind_rows(rows)
-    validate(need(nrow(d)>0, "No setting-quality data found for this setter."))
-    for (nm in intersect(c("Positive Sets","Off Sets","Poor Sets","Setting Errors","Total Attempts","Positive Sets %"),names(d))) d[[nm]] <- suppressWarnings(as.numeric(d[[nm]]))
-    counts <- intersect(c("Positive Sets","Off Sets","Poor Sets","Setting Errors","Total Attempts"), names(d))
-    total <- d[1,,drop=FALSE]
-    for(nm in counts) total[[nm]] <- sum(d[[nm]],na.rm=TRUE)
-    pct_col <- "Positive Sets %"
-    if(pct_col %in% names(total)) total[[pct_col]] <- ifelse(total[["Total Attempts"]]>0,total[["Positive Sets"]]/total[["Total Attempts"]],NA_real_)
-    total$opponent <- "TOTAL"
-    total$date <- as.Date(NA)
-    total$match_file <- "TOTAL"
-    out <- bind_rows(d,total) |> mutate(Match=ifelse(opponent=="TOTAL","TOTAL",ifelse(is.na(date),opponent,paste(format(date,"%b %d"),opponent,sep=" · "))))
-    if(pct_col %in% names(out)) out[[pct_col]] <- ifelse(is.na(out[[pct_col]]),"—",sprintf("%.1f%%",100*as.numeric(out[[pct_col]])))
-    out |> select(Match, any_of(c("Positive Sets","Off Sets","Poor Sets","Setting Errors","Total Attempts","Positive Sets %")))
+    validate(need(nrow(d) > 0, "No setting-quality data found for this setter."))
+
+    count_cols <- c("Positive Sets", "Off Sets", "Poor Sets", "Setting Errors", "Total Attempts")
+    for (nm in intersect(count_cols, names(d))) d[[nm]] <- suppressWarnings(as.numeric(as.character(d[[nm]])))
+    if (!"Set Location" %in% names(d)) d$`Set Location` <- "All Locations"
+    d$`Set Location`[is.na(d$`Set Location`) | !nzchar(trimws(as.character(d$`Set Location`)))] <- "All Locations"
+
+    per_match <- d |>
+      group_by(date, opponent, match_file, `Set Location`) |>
+      summarise(across(any_of(count_cols), ~sum(.x, na.rm = TRUE)), .groups = "drop") |>
+      mutate(
+        `Positive Sets %` = ifelse(`Total Attempts` > 0, `Positive Sets` / `Total Attempts`, NA_real_),
+        Match = ifelse(is.na(date), opponent, paste(format(date, "%b %d"), opponent, sep = " · "))
+      ) |>
+      select(Match, `Set Location`, any_of(count_cols), `Positive Sets %`)
+
+    totals <- per_match |>
+      group_by(`Set Location`) |>
+      summarise(across(any_of(count_cols), ~sum(.x, na.rm = TRUE)), .groups = "drop") |>
+      mutate(
+        Match = "TOTAL",
+        `Positive Sets %` = ifelse(`Total Attempts` > 0, `Positive Sets` / `Total Attempts`, NA_real_)
+      ) |>
+      select(Match, `Set Location`, any_of(count_cols), `Positive Sets %`)
+
+    bind_rows(per_match, totals) |>
+      mutate(`Positive Sets %` = ifelse(is.na(`Positive Sets %`), "—", sprintf("%.1f%%", 100 * `Positive Sets %`)))
   }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=0)
 
   output$athlete_dump_table <- renderTable({
@@ -3519,6 +3594,68 @@ server <- function(input, output, session) {
     validate(need(nrow(d) > 0, "No rotation setting totals found."))
     d
   }, striped=TRUE, bordered=FALSE, spacing="s", digits=0, width="100%", rownames=FALSE)
+
+
+  selected_setter_location_data <- reactive({
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
+    selected_files <- vapply(selected_matches, function(mm) {
+      if (is.null(mm$file) || !length(mm$file)) "" else basename(as.character(mm$file)[1])
+    }, character(1))
+
+    pieces <- lapply(athlete_match_data(), function(x) {
+      d <- x$setting
+      if (is.null(d) || !nrow(d) || !"Set Location" %in% names(d) || !"match_file" %in% names(d)) return(NULL)
+      d <- d[basename(as.character(d$match_file)) %in% selected_files, , drop = FALSE]
+      if (!nrow(d)) return(NULL)
+      d
+    })
+    pieces <- Filter(Negate(is.null), pieces)
+    if (!length(pieces)) return(tibble())
+    bind_rows(pieces)
+  })
+
+  output$setter_location_heading <- renderUI({
+    d <- bind_rows(lapply(athlete_match_data(), function(x) x$setting))
+    setter_first <- if (nrow(d) && "Player Name" %in% names(d)) {
+      z <- trimws(as.character(d$`Player Name`))
+      z <- z[!is.na(z) & nzchar(z)]
+      if (length(z)) z[1] else "Setter"
+    } else "Setter"
+
+    roster_match <- if ("FirstName" %in% names(roster)) which(tolower(trimws(roster$FirstName)) == tolower(setter_first))[1] else NA_integer_
+    display_name <- setter_first
+    if (length(roster_match) && !is.na(roster_match)) {
+      first <- as.character(roster$FirstName[roster_match])
+      last <- if ("LastName" %in% names(roster)) as.character(roster$LastName[roster_match]) else ""
+      display_name <- trimws(paste(first, last))
+    } else if (tolower(setter_first) == "kai") {
+      display_name <- "Kai Rosenau"
+    }
+    div(class = "setting-setter-label", paste("Setter ·", display_name))
+  })
+
+  output$setter_location_table <- renderTable({
+    d <- selected_setter_location_data()
+    validate(need(nrow(d) > 0, "Set-location breakdown is not available in the selected match athlete workbooks."))
+
+    count_cols <- c("Positive Sets", "Off Sets", "Poor Sets", "Setting Errors", "Total Attempts")
+    for (nm in intersect(count_cols, names(d))) d[[nm]] <- suppressWarnings(as.numeric(as.character(d[[nm]])))
+    d |>
+      mutate(`Set Location` = trimws(as.character(`Set Location`))) |>
+      group_by(`Set Location`) |>
+      summarise(across(any_of(count_cols), ~sum(.x, na.rm = TRUE)), .groups = "drop") |>
+      mutate(
+        `Positive Sets %` = ifelse(`Total Attempts` > 0, `Positive Sets` / `Total Attempts`, NA_real_),
+        `Set Location` = factor(`Set Location`, levels = c("Left", "Right", "Middle", "Backrow", "All Locations"))
+      ) |>
+      arrange(`Set Location`) |>
+      mutate(
+        `Set Location` = as.character(`Set Location`),
+        `Positive Sets %` = ifelse(is.na(`Positive Sets %`), "—", sprintf("%.1f%%", 100 * `Positive Sets %`))
+      ) |>
+      select(`Set Location`, any_of(count_cols), `Positive Sets %`)
+  }, striped=TRUE, bordered=FALSE, hover=TRUE, spacing="s", digits=0, width="100%", rownames=FALSE)
 
   format_setting_table <- function(d) {
     if (is.null(d) || !nrow(d)) return(d)
