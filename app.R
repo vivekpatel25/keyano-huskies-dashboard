@@ -496,6 +496,54 @@ if (is.na(match_date)) {
         )
     }
 
+    # Blocking Detail is optional for older match workbooks. Newer workbooks
+    # include a compact A1:D8 matrix with attack calls, net segments and outcomes.
+    blocking <- data.frame()
+    if ("Blocking Detail" %in% sheets) {
+      blocking_raw <- read_excel(
+        path,
+        sheet = "Blocking Detail",
+        col_names = FALSE,
+        .name_repair = "minimal"
+      )
+      if (nrow(blocking_raw) >= 8 && ncol(blocking_raw) >= 4) {
+        cell_chr <- function(r, c) {
+          x <- blocking_raw[[c]][r]
+          if (!length(x) || is.na(x)) "" else trimws(as.character(x))
+        }
+        parse_block_num <- function(x, percent = FALSE) {
+          if (length(x) == 0 || is.na(x)) return(NA_real_)
+          z <- trimws(as.character(x))
+          if (!nzchar(z) || z %in% c("-", "—")) return(NA_real_)
+          has_pct <- grepl("%", z, fixed = TRUE)
+          z <- gsub("%", "", z, fixed = TRUE)
+          z <- gsub(",", "", z, fixed = TRUE)
+          value <- suppressWarnings(as.numeric(z))
+          if (!is.finite(value)) return(NA_real_)
+          if (percent && (has_pct || abs(value) > 1)) value <- value / 100
+          value
+        }
+        blocking_rows <- lapply(2:4, function(cc) {
+          attack_call <- cell_chr(1, cc)
+          net_segment <- cell_chr(2, cc)
+          data.frame(
+            attack_call = attack_call,
+            net_segment = net_segment,
+            stuff_blocks = parse_block_num(blocking_raw[[cc]][3]),
+            positive_touch = parse_block_num(blocking_raw[[cc]][4]),
+            negative_touch = parse_block_num(blocking_raw[[cc]][5]),
+            opponent_attempts = parse_block_num(blocking_raw[[cc]][6]),
+            workbook_block_impact = parse_block_num(blocking_raw[[cc]][7], percent = TRUE),
+            opponent_attack_eff = parse_block_num(blocking_raw[[cc]][8]),
+            segment_order = cc - 1L,
+            stringsAsFactors = FALSE
+          )
+        })
+        blocking <- bind_rows(blocking_rows) |>
+          filter(nzchar(net_segment), is.finite(opponent_attempts))
+      }
+    }
+
     list(
       path = path,
       file = basename(path),
@@ -510,6 +558,7 @@ if (is.na(match_date)) {
       fb_sets = fb_sets,
       trans_sets = trans_sets,
       passing = passing,
+      blocking = blocking,
       red_zone = red_zone,
       info = info,
       error = NULL
@@ -780,6 +829,28 @@ ui <- page_fluid(
       #attack_table .attack-efficiency-table th { color:#52677a; font-size:11px; font-weight:800; text-transform:uppercase; white-space:nowrap; }
       #attack_table .attack-efficiency-table td { vertical-align:middle; }
       #attack_table .attack-efficiency-table td:nth-child(n+5) { font-weight:800; }
+
+      .blocking-detail-card { padding: 18px 18px 14px; }
+      .blocking-data-note {
+        margin: 0 0 12px; padding: 10px 13px; border-left: 4px solid #D58A19;
+        background: #FFF7E8; color: #6B4B18; border-radius: 4px; font-size: 13px;
+      }
+      .blocking-data-warning { border-left-color: #C94032; background: #FFF0EE; color: #8A3028; }
+      .blocking-summary-wrap { margin-top: 4px; }
+      .blocking-summary-table { width:100%; margin-bottom: 4px; color:#203448; }
+      .blocking-summary-table thead th {
+        color:#53697D; font-size:11px; font-weight:800; text-transform:uppercase;
+        border-bottom:2px solid #D7E1E9; white-space:nowrap; text-align:left;
+      }
+      .blocking-summary-table tbody th { font-weight:500; color:#29445D; white-space:nowrap; }
+      .blocking-summary-table td { font-weight:700; color:#203448; }
+      .blocking-summary-table td, .blocking-summary-table th { padding:7px 9px; border-color:#E1E8EE; }
+      .blocking-summary-table .blocking-summary-emphasis th,
+      .blocking-summary-table .blocking-summary-emphasis td { font-weight:800; }
+      .blocking-summary-table tr:nth-child(even) { background:#F3F6F8; }
+      .blocking-summary-table tr:nth-child(6) th,
+      .blocking-summary-table tr:nth-child(6) td { border-top:3px solid #D7E1E9; }
+      .blocking-footnote { color:#75879A; text-align:center; font-size:11px; margin:8px 0 0; }
 
       .rotation-heatmap-wrap {
         width: 100%;
@@ -1576,7 +1647,19 @@ server <- function(input, output, session) {
         )
       ),
 
-      # 4. Rotation Details
+      # 4. Blocking Detail
+      div(
+        class = "analytics-section",
+        uiOutput("blocking_heading"),
+        div(
+          class = "chart-card blocking-detail-card",
+          uiOutput("blocking_notice"),
+          plotOutput("blocking_plot", height = 300),
+          uiOutput("blocking_table")
+        )
+      ),
+
+      # 5. Rotation Details
       div(
         class = "analytics-section",
 
@@ -2929,6 +3012,237 @@ server <- function(input, output, session) {
       theme(panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(),
             axis.text.y = element_text(face = "bold", colour = "#17324D"),
             plot.margin = margin(10, 30, 10, 10))
+  })
+
+  # ---------------- BLOCKING DETAIL ----------------
+
+  blocking_period_data <- reactive({
+    selected_matches <- period_matches()
+    req(length(selected_matches) > 0)
+
+    pieces <- lapply(selected_matches, function(mm) {
+      d <- mm$blocking
+      if (is.null(d) || !is.data.frame(d) || !nrow(d)) return(NULL)
+      d <- as.data.frame(d, stringsAsFactors = FALSE)
+      needed <- c("attack_call", "net_segment", "stuff_blocks",
+                  "positive_touch", "negative_touch", "opponent_attempts",
+                  "opponent_attack_eff", "segment_order")
+      if (!all(needed %in% names(d))) return(NULL)
+      d$match_file <- as.character(mm$file)
+      d$opponent <- as.character(mm$opponent)
+      d$date <- mm$date
+      d
+    })
+    pieces <- Filter(function(x) is.data.frame(x) && nrow(x) > 0, pieces)
+    if (!length(pieces)) return(data.frame())
+    bind_rows(pieces)
+  })
+
+  blocking_summary <- reactive({
+    d <- blocking_period_data()
+    if (!is.data.frame(d) || !nrow(d)) return(data.frame())
+
+    # Pool event counts across the selected matches. Opponent attack efficiency
+    # is the arithmetic mean of the match-level segment efficiencies.
+    out <- d |>
+      group_by(segment_order, net_segment) |>
+      summarise(
+        stuff_blocks = sum(stuff_blocks, na.rm = TRUE),
+        positive_touch = sum(positive_touch, na.rm = TRUE),
+        negative_touch = sum(negative_touch, na.rm = TRUE),
+        opponent_attempts = sum(opponent_attempts, na.rm = TRUE),
+        opponent_attack_eff = {
+          v <- opponent_attack_eff[is.finite(opponent_attack_eff)]
+          if (length(v)) mean(v) else NA_real_
+        },
+        .groups = "drop"
+      ) |>
+      arrange(segment_order)
+
+    out |>
+      mutate(
+        no_block = pmax(opponent_attempts - stuff_blocks -
+                          positive_touch - negative_touch, 0),
+        block_impact = ifelse(
+          opponent_attempts > 0,
+          (stuff_blocks + positive_touch) / opponent_attempts,
+          NA_real_
+        ),
+        total_attempts = opponent_attempts
+      )
+  })
+
+  output$blocking_heading <- renderUI({
+    period <- selected_period()
+    title <- if (identical(period, "Full Season")) "BLOCKING DETAIL*" else "BLOCKING DETAIL"
+    section_title(
+      title,
+      "Opponent attacks by net segment and the impact of our block."
+    )
+  })
+
+  output$blocking_notice <- renderUI({
+    selected_matches <- period_matches()
+    d <- blocking_period_data()
+    period <- selected_period()
+    missing_matches <- Filter(function(mm) {
+      is.null(mm$blocking) || !is.data.frame(mm$blocking) || !nrow(mm$blocking)
+    }, selected_matches)
+
+    if (!length(d)) {
+      return(div(class = "blocking-data-note blocking-data-warning",
+        strong("Blocking Detail is not available for this match period."),
+        " The worksheet was introduced after the first two matches."
+      ))
+    }
+
+    if (identical(period, "Full Season")) {
+      return(div(class = "blocking-data-note",
+        strong("* First two matches (vs BC and MHC) are not included."),
+        " Blocking Detail was not recorded in those workbooks."
+      ))
+    }
+
+    if (period %in% c("Last 5", "Last 10") && length(missing_matches)) {
+      return(div(class = "blocking-data-note",
+        strong("Note: "),
+        "This period excludes the first two matches (vs BC and MHC), which do not contain a Blocking Detail worksheet."
+      ))
+    }
+
+    NULL
+  })
+
+  output$blocking_plot <- renderPlot({
+    d <- blocking_summary()
+    validate(need(nrow(d) > 0, "No Blocking Detail data is available for this period."))
+
+    d$segment_label <- factor(
+      d$net_segment,
+      levels = d$net_segment[order(d$segment_order)]
+    )
+    d$segment_label <- factor(
+      as.character(d$segment_label),
+      levels = unique(as.character(d$segment_label))
+    )
+
+    plot_data <- bind_rows(
+      transmute(d, segment_label, outcome = "Stuff block", count = stuff_blocks),
+      transmute(d, segment_label, outcome = "Positive touch", count = positive_touch),
+      transmute(d, segment_label, outcome = "Negative touch", count = negative_touch),
+      transmute(d, segment_label, outcome = "No block", count = no_block)
+    )
+    plot_data$outcome <- factor(
+      plot_data$outcome,
+      levels = c("Stuff block", "Positive touch", "Negative touch", "No block")
+    )
+
+    totals <- d |>
+      group_by(segment_label) |>
+      summarise(total = sum(opponent_attempts, na.rm = TRUE), .groups = "drop")
+
+    ggplot(plot_data, aes(x = segment_label, y = count, fill = outcome)) +
+      geom_col(width = 0.72, colour = "white", linewidth = 0.35) +
+      geom_text(
+        data = totals,
+        aes(x = segment_label, y = total, label = round(total)),
+        inherit.aes = FALSE,
+        vjust = -0.35, fontface = "bold", size = 5, colour = "#1F2D3A"
+      ) +
+      geom_vline(xintercept = c(1.5, 2.5), linetype = "dashed",
+                 linewidth = 0.45, colour = "#B8CBD8") +
+      geom_hline(yintercept = 0, linewidth = 3, colour = "#344653") +
+      annotate("text", x = 2, y = -max(1, max(totals$total, na.rm = TRUE) * 0.10),
+               label = "NET  ·  HUSKIES BLOCKING", fontface = "bold",
+               colour = "#344653", size = 3.5) +
+      scale_fill_manual(
+        values = c(
+          "Stuff block" = "#199B65",
+          "Positive touch" = "#E3A21A",
+          "Negative touch" = "#C94032",
+          "No block" = "#8296A5"
+        ),
+        breaks = c("Stuff block", "Positive touch", "Negative touch", "No block")
+      ) +
+      scale_y_continuous(
+        expand = expansion(mult = c(0.12, 0.18)),
+        limits = c(-max(1, max(totals$total, na.rm = TRUE) * 0.13),
+                   max(1, max(totals$total, na.rm = TRUE) * 1.18))
+      ) +
+      labs(x = NULL, y = NULL, fill = NULL) +
+      theme_minimal(base_size = 12) +
+      theme(
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_line(colour = "#E7EDF2"),
+        panel.background = element_rect(fill = "#EEF4F8", colour = "#D6E1E9", linewidth = 0.6),
+        plot.background = element_rect(fill = "white", colour = NA),
+        axis.text.x = element_text(face = "bold", colour = "#243746", size = 11),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "top",
+        legend.text = element_text(colour = "#243746", size = 10),
+        plot.margin = margin(12, 18, 12, 18)
+      )
+  }, res = 110)
+
+  output$blocking_table <- renderUI({
+    d <- blocking_summary()
+    validate(need(nrow(d) > 0, ""))
+    d <- d[order(d$segment_order), , drop = FALSE]
+
+    rate_or_count <- function(count, attempts) {
+      if (!is.finite(attempts) || attempts <= 0) return("—")
+      if (attempts < 25) {
+        paste0(round(count), " of ", round(attempts))
+      } else {
+        paste0(round(count / attempts * 100), "%  ", round(count))
+      }
+    }
+    impact_label <- function(row) {
+      n <- row$opponent_attempts
+      numerator <- row$stuff_blocks + row$positive_touch
+      if (!is.finite(n) || n <= 0) return("—")
+      if (n < 25) paste0(round(numerator), " of ", round(n))
+      else paste0(round(row$block_impact * 100, 1), "%")
+    }
+    eff_label <- function(row) {
+      if (!is.finite(row$opponent_attack_eff) || row$opponent_attempts < 25) return("—")
+      if (abs(row$opponent_attack_eff) < 1) {
+        sub("^0", "", sprintf("%.3f", row$opponent_attack_eff))
+      } else sprintf("%.3f", row$opponent_attack_eff)
+    }
+
+    segment_names <- as.character(d$net_segment)
+    headers <- c("NET SEGMENT", toupper(segment_names))
+    header_row <- tags$tr(lapply(headers, tags$th))
+    metric_rows <- list(
+      list(label = "Attacks faced", values = as.character(round(d$opponent_attempts))),
+      list(label = "Stuff block", values = mapply(rate_or_count, d$stuff_blocks, d$opponent_attempts)),
+      list(label = "Positive touch", values = mapply(rate_or_count, d$positive_touch, d$opponent_attempts)),
+      list(label = "Negative touch", values = mapply(rate_or_count, d$negative_touch, d$opponent_attempts)),
+      list(label = "No block", values = mapply(rate_or_count, d$no_block, d$opponent_attempts)),
+      list(label = "Block Impact %", values = vapply(seq_len(nrow(d)), function(i) impact_label(d[i, ]), character(1))),
+      list(label = "Opponent Attack Eff.", values = vapply(seq_len(nrow(d)), function(i) eff_label(d[i, ]), character(1)))
+    )
+    body <- lapply(seq_along(metric_rows), function(i) {
+      r <- metric_rows[[i]]
+      cells <- c(list(tags$th(r$label, scope = "row")),
+                 lapply(r$values, function(v) tags$td(v)))
+      tags$tr(cells, class = if (i %in% c(1, 6, 7)) "blocking-summary-emphasis" else NULL)
+    })
+
+    div(
+      class = "table-responsive blocking-summary-wrap",
+      tags$table(
+        class = "table table-sm blocking-summary-table",
+        tags$thead(header_row),
+        tags$tbody(body)
+      ),
+      div(class = "blocking-footnote",
+        "Segments with fewer than 25 opponent attacks show counts instead of rates; opponent attack efficiency is suppressed for those segments."
+      )
+    )
   })
 
   # ---------------- ROTATION DETAILS ----------------
